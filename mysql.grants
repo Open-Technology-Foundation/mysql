@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Show grants for MySQL users.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- PROFILE=${PROFILE:-} USER_SPEC=''
+declare -i SHOW_ALL=0
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] [USER[@HOST]]
+
+Show grants for MySQL users.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -a, --all            Show grants for all users
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+ARGUMENTS:
+  USER[@HOST]          User specification (default host: %)
+
+EXAMPLES:
+  $SCRIPT_NAME                     Show current user grants
+  $SCRIPT_NAME root                Show grants for root@%
+  $SCRIPT_NAME root@localhost      Show grants for root@localhost
+  $SCRIPT_NAME 'admin@10.0.0.%'    Show grants for admin@10.0.0.%
+  $SCRIPT_NAME -a                  Show grants for all users
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -a|--all)     SHOW_ALL=1 ;;
+    -h|--help)    show_help; exit 0 ;;
+    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)            USER_SPEC="$1" ;;
+  esac
+  shift
+done
+
+# Helper to run mysql commands
+run_mysql() {
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} "$@"
+}
+
+# Show grants for a specific user@host
+show_grants_for() {
+  local user="$1" host="$2"
+  echo "-- Grants for '${user}'@'${host}'"
+  if ! run_mysql -N -e "SHOW GRANTS FOR '${user}'@'${host}'" 2>/dev/null; then
+    echo "-- (unable to retrieve grants)"
+  fi
+  echo
+}
+
+if ((SHOW_ALL)); then
+  # Get all users and show their grants
+  while IFS=$'\t' read -r user host; do
+    show_grants_for "$user" "$host"
+  done < <(run_mysql -N -e "SELECT user, host FROM mysql.user ORDER BY user, host")
+
+elif [[ -n $USER_SPEC ]]; then
+  # Parse user@host specification
+  if [[ $USER_SPEC == *@* ]]; then
+    user="${USER_SPEC%@*}"
+    host="${USER_SPEC#*@}"
+  else
+    user="$USER_SPEC"
+    host='%'
+  fi
+  show_grants_for "$user" "$host"
+
+else
+  # Show grants for current user
+  echo "-- Grants for current user"
+  run_mysql -N -e "SHOW GRANTS"
+fi
+
+#fin

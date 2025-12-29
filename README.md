@@ -4,33 +4,138 @@ Bash utilities for MySQL database inspection with formatted output, colorization
 
 ## Overview
 
-Three cascading utilities provide progressive levels of detail:
-
-```
-mysql.databases → mysql.tables → mysql.display-structure
-```
-
 | Tool | Description |
 |------|-------------|
 | `mysql.databases` | List databases, or cascade to tables/structure |
 | `mysql.tables` | List tables in a database, or show table structure |
 | `mysql.display-structure` | Display detailed table structure with formatting |
+| `mysql.status` | Display MySQL server status overview |
+| `mysql.users` | List MySQL users with host patterns |
+| `mysql.grants` | Show grants for MySQL users |
+
+### Schema Inspection (cascading)
+
+```
+mysql.databases → mysql.tables → mysql.display-structure
+```
 
 ## Quick Start
 
 ```bash
+# Server status
+mysql.status
+
 # List all databases
 mysql.databases
 
 # List tables in a database
-mysql.databases mydb
 mysql.tables mydb
 
 # Show table structure
-mysql.databases mydb users
-mysql.tables mydb users
 mysql.display-structure mydb users
+
+# List users and their grants
+mysql.users
+mysql.grants root@localhost
 ```
+
+---
+
+## mysql.status
+
+Display MySQL server status overview.
+
+```bash
+mysql.status [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+mysql.status                         # Basic status
+mysql.status -v                      # Extended info (InnoDB, locks, etc.)
+mysql.status -p ~/.mysql/prod.cnf    # Use alternate profile
+```
+
+**Output:**
+
+```
+Server:      8.0.35 (MySQL Community Server - GPL)
+Uptime:      15 days 4:23:17
+Connections: 1,234 (max: 151)
+Threads:     5 running, 12 connected
+Queries:     1,234,567 (82.3/sec)
+Slow:        123
+Open tables: 512 / 4000
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-v, --verbose` | Show extended status (InnoDB, locks, bytes) |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+---
+
+## mysql.users
+
+List MySQL users with host patterns.
+
+```bash
+mysql.users [OPTIONS] [PATTERN]
+```
+
+**Examples:**
+
+```bash
+mysql.users                          # List all users
+mysql.users admin                    # Filter by username pattern
+mysql.users '%@localhost'            # Filter by user@host pattern
+mysql.users -a                       # Show all columns
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-a, --all` | Show all columns (plugin, locked, expired) |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+---
+
+## mysql.grants
+
+Show grants for MySQL users.
+
+```bash
+mysql.grants [OPTIONS] [USER[@HOST]]
+```
+
+**Examples:**
+
+```bash
+mysql.grants                         # Current user grants
+mysql.grants root                    # Grants for root@%
+mysql.grants root@localhost          # Grants for root@localhost
+mysql.grants 'admin@10.0.0.%'        # Grants with wildcard host
+mysql.grants -a                      # All users' grants
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-a, --all` | Show grants for all users |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+---
 
 ## mysql.databases
 
@@ -50,6 +155,8 @@ mysql.databases mydb users orders        # Show structure of multiple tables
 mysql.databases mydb users -f json       # Export structure as JSON
 ```
 
+---
+
 ## mysql.tables
 
 List tables or show table structure. Cascades to `mysql.display-structure` when table names are provided.
@@ -67,6 +174,8 @@ mysql.tables mydb users orders products  # Show multiple tables
 mysql.tables mydb users -s               # Include statistics
 mysql.tables mydb users -f csv -o out.csv
 ```
+
+---
 
 ## mysql.display-structure
 
@@ -101,9 +210,11 @@ mysql.display-structure mydb users -n
 mysql mydb -e 'SHOW COLUMNS FROM users' | mysql.display-structure
 ```
 
-## Options
+---
 
-All three utilities share a common set of options:
+## Common Options
+
+Options shared by schema inspection utilities (`mysql.databases`, `mysql.tables`, `mysql.display-structure`):
 
 | Option | Description |
 |--------|-------------|
@@ -122,6 +233,8 @@ Additional option for `mysql.display-structure`:
 |--------|-------------|
 | `-N, --no-cache` | Disable caching of table information |
 
+---
+
 ## MySQL Authentication
 
 ### Default Behavior
@@ -133,9 +246,10 @@ Scripts use the MySQL client's default authentication, typically `~/.my.cnf`.
 Use `-p/--profile` to specify a different MySQL config file:
 
 ```bash
+mysql.status -p ~/.mysql/prod.cnf
 mysql.databases -p ~/.mysql/prod.cnf
-mysql.tables -p ~/.mysql/prod.cnf mydb
-mysql.display-structure -p ~/.mysql/prod.cnf mydb users
+mysql.users -p ~/.mysql/prod.cnf
+mysql.grants -p ~/.mysql/prod.cnf root
 ```
 
 ### Environment Variables
@@ -144,63 +258,23 @@ Set `PROFILE` for session-wide configuration:
 
 ```bash
 export PROFILE=~/.mysql/prod.cnf
+mysql.status
 mysql.databases
-mysql.tables mydb
-mysql.display-structure mydb users
+mysql.users
 ```
 
-Set `DATABASE` to avoid repeating the database name:
-
-```bash
-export DATABASE=mydb
-mysql.tables
-mysql.display-structure users
-```
-
-## Output Formats
-
-### Table (default)
-
-Formatted ASCII table with colorized output:
-- **Key column**: Primary keys highlighted
-- **Type column**: Data types color-coded
-- **Null column**: YES/NO indicators
-- **Extra column**: auto_increment, etc.
-
-### JSON
-
-```bash
-mysql.display-structure mydb users -f json
-```
-
-Outputs structured JSON with field definitions.
-
-### CSV
-
-```bash
-mysql.display-structure mydb users -f csv
-```
-
-Standard CSV format suitable for spreadsheet import.
+---
 
 ## Installation
 
 ```bash
 # Make scripts executable
 chmod +x mysql.display-structure mysql.databases mysql.tables
+chmod +x mysql.status mysql.users mysql.grants
 
 # Enable bash completion (add to ~/.bashrc for persistence)
 source mysql.bash_completion
 ```
-
-## Bash Completion
-
-The completion script provides:
-- Option completion (`-p`, `--profile`, etc.)
-- Database name completion
-- Table name completion
-- Format completion (`table`, `json`, `csv`)
-- File completion for `-p` and `-o` options
 
 ## Dependencies
 

@@ -187,9 +187,98 @@ _mysql_databases() {
     fi
 }
 
+_mysql_status() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--profile --verbose --version --help"
+    short_opts="-p -v -V -h"
+
+    case "${prev}" in
+        --profile|-p)
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
+            return 0
+            ;;
+    esac
+}
+
+_mysql_users() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--profile --all --version --help"
+    short_opts="-p -a -V -h"
+
+    case "${prev}" in
+        --profile|-p)
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    # Complete with usernames from mysql.user
+    if command -v mysql >/dev/null 2>&1; then
+        local users
+        users=$(mysql -N -e "SELECT DISTINCT user FROM mysql.user ORDER BY user" 2>/dev/null)
+        mapfile -t COMPREPLY < <(compgen -W "${users}" -- "${cur}")
+    fi
+}
+
+_mysql_grants() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--profile --all --version --help"
+    short_opts="-p -a -V -h"
+
+    case "${prev}" in
+        --profile|-p)
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    # Complete with user@host from mysql.user
+    if command -v mysql >/dev/null 2>&1; then
+        local users
+        users=$(mysql -N -e "SELECT CONCAT(user, '@', host) FROM mysql.user ORDER BY user, host" 2>/dev/null)
+        mapfile -t COMPREPLY < <(compgen -W "${users}" -- "${cur}")
+    fi
+}
+
 # Register completion functions
 complete -F _mysql_display_structure mysql.display-structure
 complete -F _mysql_tables mysql.tables
 complete -F _mysql_databases mysql.databases
+complete -F _mysql_status mysql.status
+complete -F _mysql_users mysql.users
+complete -F _mysql_grants mysql.grants
 
 #fin

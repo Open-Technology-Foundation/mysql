@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# List MySQL users with host patterns.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- PROFILE=${PROFILE:-} PATTERN=''
+declare -i SHOW_ALL=0
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] [PATTERN]
+
+List MySQL users with host patterns.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -a, --all            Show all columns (plugin, locked, expired)
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME                List all users
+  $SCRIPT_NAME admin          Filter users matching 'admin'
+  $SCRIPT_NAME -a             Show all columns
+  $SCRIPT_NAME '%@localhost'  Filter by user@host pattern
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -a|--all)     SHOW_ALL=1 ;;
+    -h|--help)    show_help; exit 0 ;;
+    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)            PATTERN="$1" ;;
+  esac
+  shift
+done
+
+# Build query
+if ((SHOW_ALL)); then
+  columns="user, host, plugin, account_locked AS locked, password_expired AS expired"
+else
+  columns="user, host"
+fi
+
+query="SELECT $columns FROM mysql.user"
+
+# Add pattern filter if specified
+if [[ -n $PATTERN ]]; then
+  # Check if pattern contains @ for user@host matching
+  if [[ $PATTERN == *@* ]]; then
+    user_pattern="${PATTERN%@*}"
+    host_pattern="${PATTERN#*@}"
+    query+=" WHERE user LIKE '${user_pattern//"'"/"''"}' AND host LIKE '${host_pattern//"'"/"''"}'"
+  else
+    query+=" WHERE user LIKE '%${PATTERN//"'"/"''"}%'"
+  fi
+fi
+
+query+=" ORDER BY user, host"
+
+# Execute query
+mysql ${PROFILE:+--defaults-file="$PROFILE"} --table -e "$query"
+
+#fin

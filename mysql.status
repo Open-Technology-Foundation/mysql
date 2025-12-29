@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Display MySQL server status overview.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- PROFILE=${PROFILE:-}
+declare -i VERBOSE=0
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+Display MySQL server status overview.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -v, --verbose        Show extended status information
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME                Show basic server status
+  $SCRIPT_NAME -v             Show extended status info
+  $SCRIPT_NAME -p ~/.mysql/prod.cnf
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -v|--verbose) VERBOSE=1 ;;
+    -h|--help)    show_help; exit 0 ;;
+    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)            >&2 echo "Unexpected argument ${1@Q} (use --help)"; exit 22 ;;
+  esac
+  shift
+done
+
+# Format seconds as human-readable duration
+format_duration() {
+  local -i seconds=$1
+  local -i days=$((seconds / 86400))
+  local -i hours=$(((seconds % 86400) / 3600))
+  local -i mins=$(((seconds % 3600) / 60))
+  local -i secs=$((seconds % 60))
+  if ((days > 0)); then
+    printf '%d days %d:%02d:%02d' "$days" "$hours" "$mins" "$secs"
+  else
+    printf '%d:%02d:%02d' "$hours" "$mins" "$secs"
+  fi
+}
+
+# Format number with commas
+format_number() {
+  printf "%'d" "$1"
+}
+
+# Get status and variables from MySQL
+declare -A STATUS=() VARIABLES=()
+
+while IFS=$'\t' read -r name value; do
+  STATUS[$name]=$value
+done < <(mysql ${PROFILE:+--defaults-file="$PROFILE"} -N -e "SHOW GLOBAL STATUS")
+
+while IFS=$'\t' read -r name value; do
+  VARIABLES[$name]=$value
+done < <(mysql ${PROFILE:+--defaults-file="$PROFILE"} -N -e "SHOW GLOBAL VARIABLES")
+
+# Calculate derived values
+uptime=${STATUS[Uptime]:-0}
+queries=${STATUS[Queries]:-0}
+connections=${STATUS[Connections]:-0}
+threads_connected=${STATUS[Threads_connected]:-0}
+threads_running=${STATUS[Threads_running]:-0}
+slow_queries=${STATUS[Slow_queries]:-0}
+open_tables=${STATUS[Open_tables]:-0}
+max_connections=${VARIABLES[max_connections]:-0}
+table_open_cache=${VARIABLES[table_open_cache]:-0}
+version=${VARIABLES[version]:-unknown}
+version_comment=${VARIABLES[version_comment]:-}
+
+# Calculate queries per second
+if ((uptime > 0)); then
+  qps=$(awk "BEGIN {printf \"%.1f\", $queries / $uptime}")
+else
+  qps="0.0"
+fi
+
+# Display output
+printf 'Server:      %s' "$version"
+[[ -n $version_comment ]] && printf ' (%s)' "$version_comment"
+printf '\n'
+
+printf 'Uptime:      %s\n' "$(format_duration "$uptime")"
+printf 'Connections: %s (max: %s)\n' "$(format_number "$connections")" "$(format_number "$max_connections")"
+printf 'Threads:     %s running, %s connected\n' "$threads_running" "$threads_connected"
+printf 'Queries:     %s (%s/sec)\n' "$(format_number "$queries")" "$qps"
+printf 'Slow:        %s\n' "$(format_number "$slow_queries")"
+printf 'Open tables: %s / %s\n' "$(format_number "$open_tables")" "$(format_number "$table_open_cache")"
+
+# Verbose output
+if ((VERBOSE)); then
+  echo
+  printf 'Bytes recv:  %s\n' "$(format_number "${STATUS[Bytes_received]:-0}")"
+  printf 'Bytes sent:  %s\n' "$(format_number "${STATUS[Bytes_sent]:-0}")"
+  printf 'Aborted:     %s clients, %s connects\n' "${STATUS[Aborted_clients]:-0}" "${STATUS[Aborted_connects]:-0}"
+  printf 'Table locks: %s immediate, %s waited\n' "${STATUS[Table_locks_immediate]:-0}" "${STATUS[Table_locks_waited]:-0}"
+
+  # InnoDB stats if available
+  if [[ -n ${STATUS[Innodb_buffer_pool_read_requests]:-} ]]; then
+    echo
+    printf 'InnoDB buffer pool:\n'
+    printf '  Read requests:  %s\n' "$(format_number "${STATUS[Innodb_buffer_pool_read_requests]}")"
+    printf '  Write requests: %s\n' "$(format_number "${STATUS[Innodb_buffer_pool_write_requests]:-0}")"
+    printf '  Pages data:     %s\n' "$(format_number "${STATUS[Innodb_buffer_pool_pages_data]:-0}")"
+    printf '  Pages free:     %s\n' "$(format_number "${STATUS[Innodb_buffer_pool_pages_free]:-0}")"
+  fi
+fi
+
+#fin
