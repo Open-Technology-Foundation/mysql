@@ -14,21 +14,21 @@ _mysql_display_structure() {
     case "${prev}" in
         --profile|-p)
             # File completion for MySQL config files
-            COMPREPLY=( $(compgen -f -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
             return 0
             ;;
         --format|-f)
-            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "table json csv" -- "${cur}")
             return 0
             ;;
         --columns|-c)
             # Common MySQL SHOW COLUMNS field names
-            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra" -- "${cur}")
             return 0
             ;;
         --output|-o)
             # File completion for output files
-            COMPREPLY=( $(compgen -f -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
             return 0
             ;;
     esac
@@ -36,7 +36,7 @@ _mysql_display_structure() {
     # Option completion
     case "${cur}" in
         -*)
-            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
             return 0
             ;;
     esac
@@ -44,7 +44,7 @@ _mysql_display_structure() {
     # Database/table completion
     if command -v mysql >/dev/null 2>&1; then
         # Find database argument (first non-option arg after script name)
-        local -i i database_index=0
+        local -i i
         local database=""
         for ((i=1; i < COMP_CWORD; i++)); do
             case "${COMP_WORDS[i]}" in
@@ -56,7 +56,6 @@ _mysql_display_structure() {
                 *)
                     if [[ -z $database ]]; then
                         database="${COMP_WORDS[i]}"
-                        database_index=$i
                     fi
                     ;;
             esac
@@ -66,12 +65,12 @@ _mysql_display_structure() {
             # Complete database names
             local databases
             databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
-            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${databases}" -- "${cur}")
         else
             # Complete table names
             local tables
             tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
-            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${tables}" -- "${cur}")
         fi
     fi
 }
@@ -88,22 +87,22 @@ _mysql_tables() {
 
     case "${prev}" in
         --profile|-p|--output|-o)
-            COMPREPLY=( $(compgen -f -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
             return 0
             ;;
         --format|-f)
-            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "table json csv" -- "${cur}")
             return 0
             ;;
         --columns|-c)
-            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra" -- "${cur}")
             return 0
             ;;
     esac
 
     case "${cur}" in
         -*)
-            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
             return 0
             ;;
     esac
@@ -123,11 +122,11 @@ _mysql_tables() {
         if [[ -z $database ]]; then
             local databases
             databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
-            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${databases}" -- "${cur}")
         else
             local tables
             tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
-            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${tables}" -- "${cur}")
         fi
     fi
 }
@@ -144,22 +143,22 @@ _mysql_databases() {
 
     case "${prev}" in
         --profile|-p|--output|-o)
-            COMPREPLY=( $(compgen -f -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
             return 0
             ;;
         --format|-f)
-            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "table json csv" -- "${cur}")
             return 0
             ;;
         --columns|-c)
-            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra" -- "${cur}")
             return 0
             ;;
     esac
 
     case "${cur}" in
         -*)
-            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
             return 0
             ;;
     esac
@@ -179,11 +178,11 @@ _mysql_databases() {
         if [[ -z $database ]]; then
             local databases
             databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
-            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${databases}" -- "${cur}")
         else
             local tables
             tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
-            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+            mapfile -t COMPREPLY < <(compgen -W "${tables}" -- "${cur}")
         fi
     fi
 }
