@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
+# List tables in a database, or show table structure if table names provided.
+#
+# Usage:
+#   mysql.tables DATABASE              - List all tables
+#   mysql.tables DATABASE TABLE [...]  - Show table structure (via mysql.display-structure)
+#
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
 [[ -n "${1:-}" ]] || { >&2 echo "Require database name"; exit 2; }
 
-mysql --table "$1" -e "show tables"
+# If no table specified, list all tables
+if [[ -z "${2:-}" ]]; then
+  mysql --table "$1" -e "show tables"
+  exit
+fi
+
+# Otherwise, show structure for specified table(s)
+mysql.display-structure "$1" "${@:2}"
 
 #fin
