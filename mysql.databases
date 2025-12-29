@@ -1,5 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
 
 mysql --table -e "show databases"
 

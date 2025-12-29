@@ -1,5 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
 
 [[ -n "${1:-}" ]] || { >&2 echo "Require database name"; exit 2; }
 
