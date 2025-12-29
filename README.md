@@ -8,7 +8,7 @@ Bash utilities for MySQL database inspection.
 |------|-------------|
 | `mysql.display-structure` | Display table structure with formatting, colors, and export options |
 | `mysql.databases` | List all databases |
-| `mysql.tables` | List tables in a database |
+| `mysql.tables` | List tables, or show table structure if table names provided |
 
 ## Usage
 
@@ -22,10 +22,15 @@ mysql.databases
 
 ### mysql.tables
 
-List tables in a specific database:
+List tables in a database, or show table structure:
 
 ```bash
+# List all tables in database
 mysql.tables mydb
+
+# Show structure for specific table(s) (shortcut to mysql.display-structure)
+mysql.tables mydb users
+mysql.tables mydb users orders products
 ```
 
 ### mysql.display-structure
@@ -62,6 +67,7 @@ mysql.display-structure mydb users -n
 
 | Option | Description |
 |--------|-------------|
+| `-p, --profile FILE` | MySQL config file (default: ~/.my.cnf) |
 | `-c, --columns COLS` | Comma-separated list of columns to display |
 | `-f, --format FMT` | Output format: table (default), json, csv |
 | `-s, --stats` | Show table statistics |
@@ -69,6 +75,22 @@ mysql.display-structure mydb users -n
 | `-o, --output FILE` | Write output to file |
 | `-h, --help` | Display help |
 | `-V, --version` | Display version |
+
+## Using Alternate MySQL Profiles
+
+By default, scripts use `~/.my.cnf` for MySQL authentication. Use `-p` to specify a different config file:
+
+```bash
+# Use production credentials
+mysql.databases -p ~/.mysql/prod.cnf
+mysql.tables -p ~/.mysql/prod.cnf mydb
+mysql.display-structure -p ~/.mysql/prod.cnf mydb users
+
+# Or set via environment variable for session-wide default
+export PROFILE=~/.mysql/prod.cnf
+mysql.databases
+mysql.tables mydb users
+```
 
 ## Installation
 

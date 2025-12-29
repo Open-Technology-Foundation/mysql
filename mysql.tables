@@ -1,22 +1,67 @@
 #!/usr/bin/env bash
 # List tables in a database, or show table structure if table names provided.
-#
-# Usage:
-#   mysql.tables DATABASE              - List all tables
-#   mysql.tables DATABASE TABLE [...]  - Show table structure (via mysql.display-structure)
-#
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
-[[ -n "${1:-}" ]] || { >&2 echo "Require database name"; exit 2; }
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- DATABASE=${DATABASE:-} PROFILE=${PROFILE:-}
+declare -a TABLES=() OPTS=()
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] DATABASE [TABLE...]
+
+List tables in a database, or show table structure if table names provided.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -c, --columns COLS   Comma-separated list of columns to display
+  -f, --format FMT     Output format: table (default), json, csv
+  -s, --stats          Show table statistics
+  -n, --no-color       Disable colorized output
+  -o, --output FILE    Write output to file
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME mydb                     List all tables in mydb
+  $SCRIPT_NAME mydb users               Show structure of users table
+  $SCRIPT_NAME mydb users orders        Show structure of multiple tables
+  $SCRIPT_NAME mydb users -f json       Export structure as JSON
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    # Options passed to mysql.display-structure
+    -p|--profile)  OPTS+=("$1"); shift; OPTS+=("${1:-}"); PROFILE="${1:-}" ;;
+    -c|--columns)  OPTS+=("$1"); shift; OPTS+=("${1:-}") ;;
+    -f|--format)   OPTS+=("$1"); shift; OPTS+=("${1:-}") ;;
+    -s|--stats)    OPTS+=("$1") ;;
+    -n|--no-color) OPTS+=("$1") ;;
+    -o|--output)   OPTS+=("$1"); shift; OPTS+=("${1:-}") ;;
+    # Help for this script
+    -h|--help)     show_help; exit 0 ;;
+    -V|--version)  echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)            >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)             [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
+  esac
+  shift
+done
+
+[[ -n $DATABASE ]] || { >&2 echo 'Require database name'; exit 2; }
 
 # If no table specified, list all tables
-if [[ -z "${2:-}" ]]; then
-  mysql --table "$1" -e "show tables"
+if ((${#TABLES[@]} == 0)); then
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} --table "$DATABASE" -e 'show tables'
   exit
 fi
 
 # Otherwise, show structure for specified table(s)
-mysql.display-structure "$1" "${@:2}"
+mysql.display-structure ${OPTS[@]+"${OPTS[@]}"} "$DATABASE" "${TABLES[@]}"
 
 #fin

@@ -15,7 +15,7 @@ readonly -- VERSION SCRIPT_PATH SCRIPT_DIR SCRIPT_NAME
 declare -ir ENUM_WRAP_THRESHOLD=40
 
 # Configuration (modifiable by arguments)
-declare -- DATABASE='' FORMAT='table' OUTPUT_FILE=''
+declare -- DATABASE=${DATABASE:-} FORMAT=${FORMAT:-table} OUTPUT_FILE=${OUTPUT_FILE:-} PROFILE=${PROFILE:-}
 declare -a TABLES=() FILTER_COLUMNS=()
 declare -i SHOW_STATS=0 NO_COLOR=0
 
@@ -28,14 +28,7 @@ declare -- RESET='' BOLD='' RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN=''
 
 init_colors() {
   if [[ -t 1 && -t 2 ]] && ((! NO_COLOR)); then
-    RESET=$'\033[0m'
-    BOLD=$'\033[1m'
-    RED=$'\033[31m'
-    GREEN=$'\033[32m'
-    YELLOW=$'\033[33m'
-    BLUE=$'\033[34m'
-    MAGENTA=$'\033[35m'
-    CYAN=$'\033[36m'
+    RESET=$'\033[0m' BOLD=$'\033[1m' RED=$'\033[31m' GREEN=$'\033[32m' YELLOW=$'\033[33m' BLUE=$'\033[34m' MAGENTA=$'\033[35m' CYAN=$'\033[36m'
   fi
 }
 
@@ -75,6 +68,7 @@ Usage: $SCRIPT_NAME [OPTIONS] DATABASE TABLE [TABLE...]
 Display MySQL table structure with formatted output.
 
 OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
   -c, --columns COLS   Comma-separated list of columns to display
   -f, --format FMT     Output format: table (default), json, csv
   -s, --stats          Show table statistics (row count, size, etc.)
@@ -97,7 +91,7 @@ run_mysql_command() {
   local -- database="$1" table="$2"
   local -- output
 
-  if ! output=$(mysql "$database" -e "SHOW COLUMNS FROM \`$table\`" 2>&1); then
+  if ! output=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -e "SHOW COLUMNS FROM \`$table\`" 2>&1); then
     die 1 "MySQL error: $output"
   fi
   echo "$output"
@@ -111,21 +105,21 @@ get_table_stats() {
   STATS=()
 
   # Row count (backticks for reserved word table names)
-  if result=$(mysql "$database" -N -e "SELECT COUNT(*) FROM \`$table\`" 2>/dev/null); then
+  if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT COUNT(*) FROM \`$table\`" 2>/dev/null); then
     STATS[row_count]="${result:-Error}"
   else
     STATS[row_count]="Error"
   fi
 
   # Table size in MB
-  if result=$(mysql "$database" -N -e "SELECT ROUND(((data_length + index_length) / 1024 / 1024), 2) FROM information_schema.TABLES WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
+  if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT ROUND(((data_length + index_length) / 1024 / 1024), 2) FROM information_schema.TABLES WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
     STATS[size_mb]="${result:-Error}"
   else
     STATS[size_mb]="Error"
   fi
 
   # Index count
-  if result=$(mysql "$database" -N -e "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
+  if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
     STATS[index_count]="${result:-Error}"
   else
     STATS[index_count]="Error"
@@ -659,6 +653,7 @@ main() {
   # Parse arguments
   while (($#)); do
     case $1 in
+      -p|--profile)  noarg "$@"; shift; PROFILE="$1" ;;
       -c|--columns)  noarg "$@"; shift; IFS=',' read -ra FILTER_COLUMNS <<< "$1" ;;
       -f|--format)   noarg "$@"; shift; FORMAT="$1" ;;
       -s|--stats)    SHOW_STATS=1 ;;
