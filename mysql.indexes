@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Display index information for MySQL tables.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- PROFILE=${PROFILE:-} DATABASE=${DATABASE:-}
+declare -a TABLES=()
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] DATABASE [TABLE...]
+
+Display index information for MySQL tables.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME mydb                  Show indexes for all tables in mydb
+  $SCRIPT_NAME mydb users            Show indexes for users table
+  $SCRIPT_NAME mydb users orders     Show indexes for multiple tables
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -h|--help)    show_help; exit 0 ;;
+    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)            [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
+  esac
+  shift
+done
+
+[[ -n $DATABASE ]] || { >&2 echo "Require database name"; exit 2; }
+
+# Helper to run mysql commands
+run_mysql() {
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} "$@"
+}
+
+# Get list of tables if none specified
+if ((${#TABLES[@]} == 0)); then
+  mapfile -t TABLES < <(run_mysql -N "$DATABASE" -e "SHOW TABLES")
+fi
+
+# Display indexes for each table
+for table in "${TABLES[@]}"; do
+  echo "=== $table ==="
+  run_mysql --table "$DATABASE" -e "
+    SELECT
+      INDEX_NAME AS 'Index',
+      COLUMN_NAME AS 'Column',
+      SEQ_IN_INDEX AS 'Seq',
+      NON_UNIQUE AS 'Non-Unique',
+      INDEX_TYPE AS 'Type',
+      CARDINALITY AS 'Cardinality'
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = '$DATABASE'
+      AND TABLE_NAME = '$table'
+    ORDER BY INDEX_NAME, SEQ_IN_INDEX
+  "
+  echo
+done
+
+#fin

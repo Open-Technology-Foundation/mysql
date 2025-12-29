@@ -9,6 +9,8 @@ Bash utilities for MySQL database inspection with formatted output, colorization
 | `mysql.databases` | List databases, or cascade to tables/structure |
 | `mysql.tables` | List tables in a database, or show table structure |
 | `mysql.display-structure` | Display detailed table structure with formatting |
+| `mysql.indexes` | Display index information for tables |
+| `mysql.size` | Show database and table sizes |
 | `mysql.status` | Display MySQL server status overview |
 | `mysql.users` | List MySQL users with host patterns |
 | `mysql.grants` | Show grants for MySQL users |
@@ -37,6 +39,13 @@ mysql.display-structure mydb users
 # List users and their grants
 mysql.users
 mysql.grants root@localhost
+
+# Database and table sizes
+mysql.size
+mysql.size mydb
+
+# Table indexes
+mysql.indexes mydb users
 ```
 
 ---
@@ -132,6 +141,59 @@ mysql.grants -a                      # All users' grants
 |--------|-------------|
 | `-p, --profile FILE` | MySQL config file |
 | `-a, --all` | Show grants for all users |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+---
+
+## mysql.indexes
+
+Display index information for MySQL tables.
+
+```bash
+mysql.indexes [OPTIONS] DATABASE [TABLE...]
+```
+
+**Examples:**
+
+```bash
+mysql.indexes mydb                   # Show indexes for all tables in mydb
+mysql.indexes mydb users             # Show indexes for users table
+mysql.indexes mydb users orders      # Show indexes for multiple tables
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+---
+
+## mysql.size
+
+Show database and table sizes.
+
+```bash
+mysql.size [OPTIONS] [DATABASE] [TABLE...]
+```
+
+**Examples:**
+
+```bash
+mysql.size                           # Show all database sizes
+mysql.size mydb                      # Show table sizes in mydb
+mysql.size mydb users                # Show size of users table
+mysql.size mydb users orders         # Show size of multiple tables
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
 | `-h, --help` | Display help |
 | `-V, --version` | Display version |
 
@@ -270,6 +332,7 @@ mysql.users
 ```bash
 # Make scripts executable
 chmod +x mysql.display-structure mysql.databases mysql.tables
+chmod +x mysql.indexes mysql.size
 chmod +x mysql.status mysql.users mysql.grants
 
 # Enable bash completion (add to ~/.bashrc for persistence)

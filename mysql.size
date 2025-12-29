@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Show database and table sizes.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+VERSION='1.0.0'
+SCRIPT_PATH=$(realpath -- "$0")
+SCRIPT_NAME=${SCRIPT_PATH##*/}
+readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+
+declare -- PROFILE=${PROFILE:-} DATABASE=${DATABASE:-}
+declare -a TABLES=()
+
+show_help() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS] [DATABASE] [TABLE...]
+
+Show database and table sizes.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME                       Show all database sizes
+  $SCRIPT_NAME mydb                  Show table sizes in mydb
+  $SCRIPT_NAME mydb users            Show size of users table
+  $SCRIPT_NAME mydb users orders     Show size of multiple tables
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -h|--help)    show_help; exit 0 ;;
+    -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    *)            [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
+  esac
+  shift
+done
+
+# Helper to run mysql commands
+run_mysql() {
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} "$@"
+}
+
+# Format bytes to human-readable
+format_size() {
+  local -i bytes=$1
+  if ((bytes >= 1073741824)); then
+    awk "BEGIN {printf \"%.2f GB\", $bytes / 1073741824}"
+  elif ((bytes >= 1048576)); then
+    awk "BEGIN {printf \"%.2f MB\", $bytes / 1048576}"
+  elif ((bytes >= 1024)); then
+    awk "BEGIN {printf \"%.2f KB\", $bytes / 1024}"
+  else
+    echo "${bytes} B"
+  fi
+}
+
+if [[ -z $DATABASE ]]; then
+  # Show all database sizes
+  echo "=== Database Sizes ==="
+  run_mysql --table -e "
+    SELECT
+      TABLE_SCHEMA AS 'Database',
+      COUNT(*) AS 'Tables',
+      CONCAT(ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), ' MB') AS 'Size',
+      CONCAT(ROUND(SUM(DATA_LENGTH) / 1024 / 1024, 2), ' MB') AS 'Data',
+      CONCAT(ROUND(SUM(INDEX_LENGTH) / 1024 / 1024, 2), ' MB') AS 'Index'
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+    GROUP BY TABLE_SCHEMA
+    ORDER BY SUM(DATA_LENGTH + INDEX_LENGTH) DESC
+  "
+
+elif ((${#TABLES[@]} == 0)); then
+  # Show table sizes for database
+  echo "=== Table Sizes: $DATABASE ==="
+  run_mysql --table -e "
+    SELECT
+      TABLE_NAME AS 'Table',
+      TABLE_ROWS AS 'Rows',
+      CONCAT(ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), ' MB') AS 'Size',
+      CONCAT(ROUND(DATA_LENGTH / 1024 / 1024, 2), ' MB') AS 'Data',
+      CONCAT(ROUND(INDEX_LENGTH / 1024 / 1024, 2), ' MB') AS 'Index'
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '$DATABASE'
+    ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC
+  "
+
+else
+  # Show sizes for specific tables
+  table_list=$(printf "'%s'," "${TABLES[@]}")
+  table_list=${table_list%,}
+
+  echo "=== Table Sizes: $DATABASE ==="
+  run_mysql --table -e "
+    SELECT
+      TABLE_NAME AS 'Table',
+      TABLE_ROWS AS 'Rows',
+      CONCAT(ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), ' MB') AS 'Size',
+      CONCAT(ROUND(DATA_LENGTH / 1024 / 1024, 2), ' MB') AS 'Data',
+      CONCAT(ROUND(INDEX_LENGTH / 1024 / 1024, 2), ' MB') AS 'Index'
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '$DATABASE'
+      AND TABLE_NAME IN ($table_list)
+    ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC
+  "
+fi
+
+#fin
