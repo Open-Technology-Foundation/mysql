@@ -1,79 +1,196 @@
 #!/bin/bash
-# Bash completion for display-structure script
+# Bash completion for MySQL utilities
 
-_display_structure() {
-    local cur prev opts
+_mysql_display_structure() {
+    local cur prev opts short_opts
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    
-    # Available long options
-    opts="--columns --format --stats --no-color --no-cache --output --version --help"
-    
-    # Short options  
-    short_opts="-c -f -s -n -N -o -V -h"
-    
+
+    # Available options
+    opts="--profile --columns --format --stats --no-color --no-cache --output --version --help"
+    short_opts="-p -c -f -s -n -N -o -V -h"
+
     case "${prev}" in
+        --profile|-p)
+            # File completion for MySQL config files
+            COMPREPLY=( $(compgen -f -- "${cur}") )
+            return 0
+            ;;
         --format|-f)
-            COMPREPLY=( $(compgen -W "table json csv" -- ${cur}) )
+            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
             return 0
             ;;
         --columns|-c)
             # Common MySQL SHOW COLUMNS field names
-            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- ${cur}) )
+            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
             return 0
             ;;
         --output|-o)
             # File completion for output files
-            COMPREPLY=( $(compgen -f -- ${cur}) )
-            return 0
-            ;;
-        display-structure)
-            # First argument should be database name
-            # Try to get MySQL databases if mysql client is available
-            if command -v mysql >/dev/null 2>&1; then
-                local databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -v information_schema | grep -v performance_schema | grep -v mysql | grep -v sys)
-                COMPREPLY=( $(compgen -W "${databases}" -- ${cur}) )
-            fi
+            COMPREPLY=( $(compgen -f -- "${cur}") )
             return 0
             ;;
     esac
-    
-    # If we have at least 2 arguments (script + database)
-    if [ ${COMP_CWORD} -ge 2 ]; then
-        local database="${COMP_WORDS[1]}"
-        
-        # Check if current word starts with a dash (option)
-        case "${cur}" in
-            -*)
-                COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- ${cur}) )
-                return 0
-                ;;
-            *)
-                # Try to get table names for the specified database
-                if command -v mysql >/dev/null 2>&1; then
-                    local tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
-                    COMPREPLY=( $(compgen -W "${tables}" -- ${cur}) )
-                fi
-                return 0
-                ;;
-        esac
-    fi
-    
-    # Default completion with options
+
+    # Option completion
     case "${cur}" in
         -*)
-            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- ${cur}) )
-            ;;
-        *)
-            # If no database specified yet, try to complete with database names
-            if command -v mysql >/dev/null 2>&1; then
-                local databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -v information_schema | grep -v performance_schema | grep -v mysql | grep -v sys)
-                COMPREPLY=( $(compgen -W "${databases}" -- ${cur}) )
-            fi
+            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            return 0
             ;;
     esac
+
+    # Database/table completion
+    if command -v mysql >/dev/null 2>&1; then
+        # Find database argument (first non-option arg after script name)
+        local -i i database_index=0
+        local database=""
+        for ((i=1; i < COMP_CWORD; i++)); do
+            case "${COMP_WORDS[i]}" in
+                -p|--profile|-c|--columns|-f|--format|-o|--output)
+                    ((i++))  # Skip next word (option argument)
+                    ;;
+                -*)
+                    ;;
+                *)
+                    if [[ -z $database ]]; then
+                        database="${COMP_WORDS[i]}"
+                        database_index=$i
+                    fi
+                    ;;
+            esac
+        done
+
+        if [[ -z $database ]]; then
+            # Complete database names
+            local databases
+            databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
+            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+        else
+            # Complete table names
+            local tables
+            tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
+            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+        fi
+    fi
 }
 
-# Register the completion function
-complete -F _display_structure display-structure
+_mysql_tables() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Available options
+    opts="--profile --columns --format --stats --no-color --output --version --help"
+    short_opts="-p -c -f -s -n -o -V -h"
+
+    case "${prev}" in
+        --profile|-p|--output|-o)
+            COMPREPLY=( $(compgen -f -- "${cur}") )
+            return 0
+            ;;
+        --format|-f)
+            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
+            return 0
+            ;;
+        --columns|-c)
+            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            return 0
+            ;;
+    esac
+
+    # Database/table completion (same logic as display-structure)
+    if command -v mysql >/dev/null 2>&1; then
+        local -i i
+        local database=""
+        for ((i=1; i < COMP_CWORD; i++)); do
+            case "${COMP_WORDS[i]}" in
+                -p|--profile|-c|--columns|-f|--format|-o|--output) ((i++)) ;;
+                -*) ;;
+                *) [[ -z $database ]] && database="${COMP_WORDS[i]}" ;;
+            esac
+        done
+
+        if [[ -z $database ]]; then
+            local databases
+            databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
+            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+        else
+            local tables
+            tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
+            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+        fi
+    fi
+}
+
+_mysql_databases() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Available options
+    opts="--profile --columns --format --stats --no-color --output --version --help"
+    short_opts="-p -c -f -s -n -o -V -h"
+
+    case "${prev}" in
+        --profile|-p|--output|-o)
+            COMPREPLY=( $(compgen -f -- "${cur}") )
+            return 0
+            ;;
+        --format|-f)
+            COMPREPLY=( $(compgen -W "table json csv" -- "${cur}") )
+            return 0
+            ;;
+        --columns|-c)
+            COMPREPLY=( $(compgen -W "Field Type Null Key Default Extra" -- "${cur}") )
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            COMPREPLY=( $(compgen -W "${opts} ${short_opts}" -- "${cur}") )
+            return 0
+            ;;
+    esac
+
+    # Database/table completion
+    if command -v mysql >/dev/null 2>&1; then
+        local -i i
+        local database=""
+        for ((i=1; i < COMP_CWORD; i++)); do
+            case "${COMP_WORDS[i]}" in
+                -p|--profile|-c|--columns|-f|--format|-o|--output) ((i++)) ;;
+                -*) ;;
+                *) [[ -z $database ]] && database="${COMP_WORDS[i]}" ;;
+            esac
+        done
+
+        if [[ -z $database ]]; then
+            local databases
+            databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
+            COMPREPLY=( $(compgen -W "${databases}" -- "${cur}") )
+        else
+            local tables
+            tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
+            COMPREPLY=( $(compgen -W "${tables}" -- "${cur}") )
+        fi
+    fi
+}
+
+# Register completion functions
+complete -F _mysql_display_structure mysql.display-structure
+complete -F _mysql_tables mysql.tables
+complete -F _mysql_databases mysql.databases
+
+#fin
