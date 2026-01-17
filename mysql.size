@@ -3,16 +3,14 @@
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
-VERSION='1.0.0'
-SCRIPT_PATH=$(realpath -- "$0")
-SCRIPT_NAME=${SCRIPT_PATH##*/}
-readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+declare -r VERSION=1.0.0
+declare -r SCRIPT_NAME=${0##*/}
 
 declare -- PROFILE=${PROFILE:-} DATABASE=${DATABASE:-}
 declare -a TABLES=()
 
 show_help() {
-  cat <<EOF
+  cat <<HELP
 Usage: $SCRIPT_NAME [OPTIONS] [DATABASE] [TABLE...]
 
 Show database and table sizes.
@@ -27,15 +25,15 @@ EXAMPLES:
   $SCRIPT_NAME mydb                  Show table sizes in mydb
   $SCRIPT_NAME mydb users            Show size of users table
   $SCRIPT_NAME mydb users orders     Show size of multiple tables
-EOF
+HELP
 }
 
 while (($#)); do
   case $1 in
-    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -p|--profile) shift; PROFILE=${1:-} ;;
     -h|--help)    show_help; exit 0 ;;
     -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
+    -*)           >&2 echo "Invalid option ${1@Q}"; exit 22 ;;
     *)            [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
   esac
   shift
@@ -62,7 +60,7 @@ format_size() {
 
 if [[ -z $DATABASE ]]; then
   # Show all database sizes
-  echo "=== Database Sizes ==="
+  echo '=== Database Sizes ==='
   run_mysql --table -e "
     SELECT
       TABLE_SCHEMA AS 'Database',

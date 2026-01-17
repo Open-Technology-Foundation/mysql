@@ -3,16 +3,14 @@
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
-VERSION='1.0.0'
-SCRIPT_PATH=$(realpath -- "$0")
-SCRIPT_NAME=${SCRIPT_PATH##*/}
-readonly -- VERSION SCRIPT_PATH SCRIPT_NAME
+declare -r VERSION=1.0.0
+declare -r SCRIPT_NAME=${0##*/}
 
 declare -- PROFILE=${PROFILE:-}
 declare -i VERBOSE=0
 
 show_help() {
-  cat <<EOF
+  cat <<HELP
 Usage: $SCRIPT_NAME [OPTIONS]
 
 Display MySQL server status overview.
@@ -27,17 +25,17 @@ EXAMPLES:
   $SCRIPT_NAME                Show basic server status
   $SCRIPT_NAME -v             Show extended status info
   $SCRIPT_NAME -p ~/.mysql/prod.cnf
-EOF
+HELP
 }
 
 while (($#)); do
   case $1 in
-    -p|--profile) shift; PROFILE="${1:-}" ;;
+    -p|--profile) shift; PROFILE=${1:-} ;;
     -v|--verbose) VERBOSE=1 ;;
     -h|--help)    show_help; exit 0 ;;
     -V|--version) echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-    -*)           >&2 echo "Invalid option ${1@Q} (use --help)"; exit 22 ;;
-    *)            >&2 echo "Unexpected argument ${1@Q} (use --help)"; exit 22 ;;
+    -*)           >&2 echo "Invalid option ${1@Q}"; exit 22 ;;
+    *)            >&2 echo "Unexpected argument ${1@Q}"; exit 22 ;;
   esac
   shift
 done
@@ -94,7 +92,7 @@ fi
 
 # Display output
 printf 'Server:      %s' "$version"
-[[ -n $version_comment ]] && printf ' (%s)' "$version_comment"
+[[ -z $version_comment ]] || printf ' (%s)' "$version_comment"
 printf '\n'
 
 printf 'Uptime:      %s\n' "$(format_duration "$uptime")"

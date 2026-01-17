@@ -5,14 +5,11 @@
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
 
-VERSION='1.0.0'
-SCRIPT_PATH=$(realpath -- "$0")
-SCRIPT_DIR=${SCRIPT_PATH%/*}
-SCRIPT_NAME=${SCRIPT_PATH##*/}
-readonly -- VERSION SCRIPT_PATH SCRIPT_DIR SCRIPT_NAME
+declare -r VERSION=1.0.0
+declare -r SCRIPT_DIR=${0%/*} SCRIPT_NAME=${0##*/}
 
 # Constants
-declare -ir ENUM_WRAP_THRESHOLD=40
+declare -ir ENUM_WRAP_THRESHOLD=${ENUM_WRAP_THRESHOLD:-40}
 
 # Configuration (modifiable by arguments)
 declare -- DATABASE=${DATABASE:-} FORMAT=${FORMAT:-table} OUTPUT_FILE=${OUTPUT_FILE:-} PROFILE=${PROFILE:-}
@@ -34,8 +31,8 @@ init_colors() {
 
 # Messaging functions
 _msg() {
-  local -- status="${FUNCNAME[1]}" prefix="$SCRIPT_NAME:" msg
-  case "$status" in
+  local -- prefix="$SCRIPT_NAME:" msg
+  case ${FUNCNAME[1]} in
     info)  prefix+=" ${CYAN}◉${RESET}" ;;
     warn)  prefix+=" ${YELLOW}▲${RESET}" ;;
     error) prefix+=" ${RED}✗${RESET}" ;;
@@ -46,13 +43,13 @@ _msg() {
 info() { >&2 _msg "$@"; }
 warn() { >&2 _msg "$@"; }
 error() { >&2 _msg "$@"; }
-die() { (($# > 1)) && error "${@:2}"; exit "${1:-1}"; }
-noarg() { (($# > 1)) || die 22 "Option '$1' requires an argument"; }
+die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
+noarg() { (($# > 1)) || die 22 "Option ${1:-} requires an argument"; }
 
 # Validate MySQL identifier to prevent SQL injection
 validate_mysql_identifier() {
   local -- name="$1" type="${2:-identifier}"
-  [[ -z $name ]] && die 22 "Empty $type name"
+  [[ -n $name ]] || die 22 "Empty $type name"
   [[ $name =~ ^[a-zA-Z0-9_\$-]+$ ]] || die 22 "Invalid $type name '$name' (contains unsafe characters)"
 }
 
@@ -61,7 +58,7 @@ get_terminal_width() {
 }
 
 usage() {
-  cat <<EOF
+  cat <<HELP
 Usage: $SCRIPT_NAME [OPTIONS] DATABASE TABLE [TABLE...]
        mysql DATABASE -e 'SHOW COLUMNS FROM TABLE' | $SCRIPT_NAME [OPTIONS]
 
@@ -83,12 +80,12 @@ EXAMPLES:
   $SCRIPT_NAME mydb users -f json -o structure.json
   $SCRIPT_NAME mydb users -s
   mysql mydb -e 'SHOW COLUMNS FROM users' | $SCRIPT_NAME
-EOF
+HELP
 }
 
 # Run MySQL command and capture output
 run_mysql_command() {
-  local -- database="$1" table="$2"
+  local -- database=$1 table=$2
   local -- output
 
   if ! output=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -e "SHOW COLUMNS FROM \`$table\`" 2>&1); then
@@ -99,30 +96,30 @@ run_mysql_command() {
 
 # Get table statistics
 get_table_stats() {
-  local -- database="$1" table="$2"
+  local -- database=$1 table=$2
   local -- result
 
   STATS=()
 
   # Row count (backticks for reserved word table names)
   if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT COUNT(*) FROM \`$table\`" 2>/dev/null); then
-    STATS[row_count]="${result:-Error}"
+    STATS[row_count]=${result:-Error}
   else
-    STATS[row_count]="Error"
+    STATS[row_count]=Error
   fi
 
   # Table size in MB
   if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT ROUND(((data_length + index_length) / 1024 / 1024), 2) FROM information_schema.TABLES WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
-    STATS[size_mb]="${result:-Error}"
+    STATS[size_mb]=${result:-Error}
   else
-    STATS[size_mb]="Error"
+    STATS[size_mb]=Error
   fi
 
   # Index count
   if result=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -N -e "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE table_schema = '$database' AND table_name = '$table'" 2>/dev/null); then
-    STATS[index_count]="${result:-Error}"
+    STATS[index_count]=${result:-Error}
   else
-    STATS[index_count]="Error"
+    STATS[index_count]=Error
   fi
 }
 
@@ -135,7 +132,7 @@ parse_mysql_output() {
   DATA=()
 
   while IFS= read -r line || [[ -n $line ]]; do
-    [[ -z $line ]] && continue
+    [[ -n $line ]] || continue
 
     if ((first)); then
       # First line is headers
@@ -150,7 +147,7 @@ parse_mysql_output() {
 
 # Apply column filter
 apply_column_filter() {
-  (( ${#FILTER_COLUMNS[@]} == 0 )) && return 0
+  ((${#FILTER_COLUMNS[@]})) || return 0
 
   local -a new_headers=() indices=()
   local -i i j found
@@ -166,10 +163,10 @@ apply_column_filter() {
         break
       fi
     done
-    ((found)) || warn "Column '${FILTER_COLUMNS[j]}' not found"
+    ((found)) || warn "Column ${FILTER_COLUMNS[j]@Q} not found"
   done
 
-  (( ${#indices[@]} == 0 )) && die 1 "No valid columns specified"
+  ((${#indices[@]})) || die 1 'No valid columns specified'
 
   # Filter data rows
   local -a new_data=()
@@ -178,7 +175,7 @@ apply_column_filter() {
 
   for row in "${DATA[@]}"; do
     IFS=$'\t' read -ra fields <<< "$row"
-    filtered_row=""
+    filtered_row=''
     for i in "${indices[@]}"; do
       [[ -n $filtered_row ]] && filtered_row+=$'\t'
       filtered_row+="${fields[i]:-}"
@@ -212,16 +209,16 @@ calculate_column_widths() {
       # For enum types, calculate based on wrapped format
       if [[ $cell == enum\(* ]]; then
         # Find longest enum value + "enum(" prefix
-        local -- enum_content longest_val=""
-        enum_content="${cell#enum(}"
-        enum_content="${enum_content%)}"
+        local -- enum_content longest_val=''
+        enum_content=${cell#enum(}
+        enum_content=${enum_content%)}
 
         local -- val
         while IFS= read -r -d ',' val || [[ -n $val ]]; do
           val="${val#\'}"
           val="${val%\'}"
           if (( ${#val} > ${#longest_val} )); then
-            longest_val="$val"
+            longest_val=$val
           fi
         done <<< "${enum_content},"
 
@@ -264,34 +261,34 @@ calculate_column_widths() {
 
 # Format enum for multi-line display (populates ENUM_LINES array)
 format_enum() {
-  local -- enum_str="$1"
-  local -i column_width="${2:-50}"
+  local -- enum_str=$1
+  local -i column_width=${2:-50}
 
   ENUM_LINES=()
 
   # Extract enum content
   local -- content
-  content="${enum_str#enum(}"
-  content="${content%)}"
+  content=${enum_str#enum(}
+  content=${content%)}
 
   # Parse values (handle quoted strings with commas inside)
   local -a values=()
-  local -- current="" char
+  local -- current='' char
   local -i i in_quote=0
 
   for (( i=0; i<${#content}; i++ )); do
     char="${content:i:1}"
     if [[ $char == "'" ]]; then
-      current+="$char"
+      current+=$char
       ((in_quote)) && in_quote=0 || in_quote=1
     elif [[ $char == "," ]] && (( !in_quote )); then
       values+=("$current")
-      current=""
+      current=''
     else
-      current+="$char"
+      current+=$char
     fi
   done
-  [[ -n $current ]] && values+=("$current")
+  [[ -z $current ]] || values+=("$current")
 
   if (( ${#values[@]} == 0 )); then
     ENUM_LINES=("$enum_str")
@@ -312,20 +309,20 @@ format_enum() {
   for (( j=1; j<${#values[@]}; j++ )); do
     val="${values[j]}"
     if (( j < ${#values[@]} - 1 )); then
-      val+=","
+      val+=','
     fi
 
     if [[ -z $current_line ]]; then
-      current_line="$val"
+      current_line=$val
     elif (( ${#current_line} + 1 + ${#val} > column_width )); then
       ENUM_LINES+=("$current_line")
-      current_line="$val"
+      current_line=$val
     else
       current_line+=" $val"
     fi
   done
 
-  [[ -n $current_line ]] && ENUM_LINES+=("$current_line")
+  [[ -z $current_line ]] || ENUM_LINES+=("$current_line")
 
   # Add closing paren to last line
   local -- last="${ENUM_LINES[-1]}"
@@ -338,8 +335,9 @@ format_enum() {
 
 # Colorize a cell based on header and value
 colorize_cell() {
-  local -- cell="$1" header="$2"
-  local -- header_lower="${header,,}" cell_lower="${cell,,}"
+  local -- cell=$1 header=$2
+  local -- header_lower=${header,,}
+  local -- cell_lower=${cell,,}
 
   ((NO_COLOR)) && { echo "$cell"; return; }
 
@@ -387,22 +385,22 @@ colorize_cell() {
 
 # Print separator line
 print_separator() {
-  local -- sep="+"
+  local -- sep='+'
   local -i i
 
   for i in "${!WIDTHS[@]}"; do
     sep+=$(printf '%*s' "$(( WIDTHS[i] + 2 ))" '' | tr ' ' '-')
-    sep+="+"
+    sep+='+'
   done
   echo "$sep"
 }
 
 # Print table statistics
 print_stats() {
-  (( ${#STATS[@]} == 0 )) && return
+  ((${#STATS[@]})) || return
 
   if ((NO_COLOR)); then
-    echo "Table Statistics:"
+    echo 'Table Statistics:'
     echo "  Row Count: ${STATS[row_count]:-N/A}"
     echo "  Size: ${STATS[size_mb]:-N/A} MB"
     echo "  Index Count: ${STATS[index_count]:-N/A}"
@@ -426,13 +424,13 @@ print_table() {
   done
 
   # Print stats if available
-  ((SHOW_STATS)) && print_stats
+  ((SHOW_STATS==0)) || print_stats
 
   # Print header separator
   print_separator
 
   # Print headers
-  local -- header_line="|"
+  local -- header_line='|'
   for i in "${!HEADERS[@]}"; do
     if ((NO_COLOR)); then
       printf -v padding "%-${WIDTHS[i]}s" "${HEADERS[i]}"
@@ -454,7 +452,7 @@ print_table() {
 
     # Ensure we have enough fields
     while (( ${#fields[@]} < ${#HEADERS[@]} )); do
-      fields+=("")
+      fields+=('')
     done
 
     # Check for enum that needs wrapping
@@ -470,9 +468,9 @@ print_table() {
 
     if (( !has_enum )); then
       # Normal row
-      local -- row_line="|"
+      local -- row_line='|'
       for i in "${!fields[@]}"; do
-        cell="${fields[i]}"
+        cell=${fields[i]}
         colored_cell=$(colorize_cell "$cell" "${HEADERS[i]}")
         printf -v padding "%-${WIDTHS[i]}s" "$cell"
         # Replace plain text with colored version
@@ -487,7 +485,7 @@ print_table() {
       # Multi-line enum row
       local -i line_num
       for line_num in "${!ENUM_LINES[@]}"; do
-        local -- row_line="|"
+        local -- row_line='|'
         for i in "${!fields[@]}"; do
           if (( i == enum_col )); then
             cell="${ENUM_LINES[line_num]}"
@@ -525,13 +523,13 @@ print_table() {
 
 # Export to JSON
 export_json() {
-  local -- output_file="${1:-}"
+  local -- output_file=${1:-}
 
   if ! command -v jq >/dev/null 2>&1; then
-    die 1 "jq is required for JSON output but not installed"
+    die 1 'jq is required for JSON output but not installed'
   fi
 
-  local -- json_array="["
+  local -- json_array='['
   local -i first_row=1
   local -- row
   local -a fields
@@ -539,15 +537,15 @@ export_json() {
   for row in "${DATA[@]}"; do
     IFS=$'\t' read -ra fields <<< "$row"
 
-    ((first_row)) || json_array+=","
+    ((first_row)) || json_array+=','
     first_row=0
 
-    json_array+="{"
+    json_array+='{'
     local -i first_field=1
     local -i i
 
     for i in "${!HEADERS[@]}"; do
-      ((first_field)) || json_array+=","
+      ((first_field)) || json_array+=','
       first_field=0
 
       local -- value="${fields[i]:-}"
@@ -559,9 +557,9 @@ export_json() {
 
       json_array+="\"${HEADERS[i]}\":\"$value\""
     done
-    json_array+="}"
+    json_array+='}'
   done
-  json_array+="]"
+  json_array+=']'
 
   if [[ -n $output_file ]]; then
     echo "$json_array" | jq '.' > "$output_file"
@@ -573,9 +571,9 @@ export_json() {
 
 # Quote CSV field if it contains special characters
 _csv_field() {
-  local -- field="$1"
+  local -- field=$1
   if [[ $field == *,* || $field == *\"* || $field == *$'\n'* ]]; then
-    field="${field//\"/\"\"}"  # Escape quotes by doubling
+    field=${field//\"/\"\"}  # Escape quotes by doubling
     echo "\"$field\""
   else
     echo "$field"
@@ -584,11 +582,11 @@ _csv_field() {
 
 # Export to CSV
 export_csv() {
-  local -- output_file="${1:-}"
-  local -- output=""
+  local -- output_file=${1:-}
+  local -- output=''
 
   # Headers
-  local -- header_line=""
+  local -- header_line=''
   local -i i
   for i in "${!HEADERS[@]}"; do
     ((i > 0)) && header_line+=","
@@ -601,7 +599,7 @@ export_csv() {
   local -a fields
   for row in "${DATA[@]}"; do
     IFS=$'\t' read -ra fields <<< "$row"
-    local -- data_line=""
+    local -- data_line=''
     for i in "${!HEADERS[@]}"; do
       ((i > 0)) && data_line+=","
       data_line+=$(_csv_field "${fields[i]:-}")
@@ -619,7 +617,7 @@ export_csv() {
 
 # Process a single table
 process_table() {
-  local -- database="$1" table="$2"
+  local -- database=$1 table=$2
   local -- mysql_output
 
   # Validate identifiers to prevent SQL injection
@@ -630,10 +628,10 @@ process_table() {
   mysql_output=$(run_mysql_command "$database" "$table")
   parse_mysql_output <<< "$mysql_output"
 
-  (( ${#HEADERS[@]} == 0 )) && die 1 "Could not parse MySQL output"
+  ((${#HEADERS[@]})) || die 1 "Could not parse MySQL output"
 
   # Get stats if requested
-  ((SHOW_STATS)) && get_table_stats "$database" "$table"
+  ((SHOW_STATS==0)) || get_table_stats "$database" "$table"
 
   # Apply column filter
   apply_column_filter
@@ -653,19 +651,25 @@ main() {
   # Parse arguments
   while (($#)); do
     case $1 in
-      -p|--profile)  noarg "$@"; shift; PROFILE="$1" ;;
+      -p|--profile)  noarg "$@"; shift; PROFILE=$1 ;;
       -c|--columns)  noarg "$@"; shift; IFS=',' read -ra FILTER_COLUMNS <<< "$1" ;;
-      -f|--format)   noarg "$@"; shift; FORMAT="$1" ;;
+      -f|--format)   noarg "$@"; shift; FORMAT=$1 ;;
       -s|--stats)    SHOW_STATS=1 ;;
       -n|--no-color) NO_COLOR=1 ;;
-      -o|--output)   noarg "$@"; shift; OUTPUT_FILE="$1" ;;
-      -h|--help)     usage; exit 0 ;;
-      -V|--version)  echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
-      -*)            die 22 "Invalid option '$1' (use --help)" ;;
+      -o|--output)   noarg "$@"; shift; OUTPUT_FILE=$1 ;;
+      -V|--version)  echo "$SCRIPT_NAME $VERSION"; return 0 ;;
+      -h|--help)     usage; return 0 ;;
+      -[pcfsnoVh]?*) set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+      -*)            die 22 "Invalid option ${1@Q}" ;;
       *)             [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
     esac
     shift
   done
+
+  # Validate profile file if specified
+  if [[ -n $PROFILE ]]; then
+    [[ -r $PROFILE ]] || die 2 "Profile file not readable: $PROFILE"
+  fi
 
   # Initialize colors after parsing (NO_COLOR may be set)
   init_colors
@@ -673,13 +677,13 @@ main() {
   # Validate format
   case "$FORMAT" in
     table|json|csv) ;;
-    *) die 22 "Invalid format '$FORMAT' (use table, json, or csv)" ;;
+    *) die 22 "Invalid format ${FORMAT@Q} (use table, json, or csv)" ;;
   esac
 
   # Handle stdin mode
   if [[ -z $DATABASE ]] && [[ ! -t 0 ]]; then
     parse_mysql_output
-    (( ${#HEADERS[@]} == 0 )) && die 1 "Could not parse MySQL output from stdin"
+    ((${#HEADERS[@]})) || die 1 'Could not parse MySQL output from stdin'
     apply_column_filter
     calculate_column_widths
 
@@ -692,11 +696,11 @@ main() {
   fi
 
   # Validate arguments
-  [[ -z $DATABASE ]] && { usage; die 22 "Database name required"; }
-  (( ${#TABLES[@]} == 0 )) && die 22 "At least one table name required"
+  [[ -n $DATABASE ]] || { usage; die 22 'Database name required'; }
+  ((${#TABLES[@]})) || die 22 'At least one table name required'
 
   # Check mysql client
-  command -v mysql >/dev/null 2>&1 || die 1 "MySQL client not found"
+  command -v mysql >/dev/null 2>&1 || die 1 'MySQL client not found'
 
   # Process each table
   local -i i
@@ -720,5 +724,4 @@ main() {
 }
 
 main "$@"
-
 #fin
