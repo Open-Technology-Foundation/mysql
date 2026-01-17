@@ -289,12 +289,6 @@ Options shared by schema inspection utilities (`mysql.databases`, `mysql.tables`
 | `-h, --help` | Display help |
 | `-V, --version` | Display version |
 
-Additional option for `mysql.display-structure`:
-
-| Option | Description |
-|--------|-------------|
-| `-N, --no-cache` | Disable caching of table information |
-
 ---
 
 ## MySQL Authentication
@@ -331,12 +325,16 @@ mysql.users
 
 ```bash
 # Make scripts executable
-chmod +x mysql.display-structure mysql.databases mysql.tables
-chmod +x mysql.indexes mysql.size
-chmod +x mysql.status mysql.users mysql.grants
+chmod +x mysql.*
 
-# Enable bash completion (add to ~/.bashrc for persistence)
+# Optional: Add to PATH via symlink
+ln -s "$(pwd)"/mysql.* ~/.local/bin/
+
+# Enable bash completion
 source mysql.bash_completion
+
+# For persistent completion, add to ~/.bashrc:
+# source /path/to/mysql.bash_completion
 ```
 
 ## Dependencies
