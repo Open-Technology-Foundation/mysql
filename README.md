@@ -11,6 +11,7 @@ Bash utilities for MySQL database inspection with formatted output, colorization
 | `mysql.display-structure` | Display detailed table structure with formatting |
 | `mysql.indexes` | Display index information for tables |
 | `mysql.size` | Show database and table sizes |
+| `mysql.updates` | Show database and table modification timestamps |
 | `mysql.status` | Display MySQL server status overview |
 | `mysql.users` | List MySQL users with host patterns |
 | `mysql.grants` | Show grants for MySQL users |
@@ -196,6 +197,54 @@ mysql.size mydb users orders         # Show size of multiple tables
 | `-p, --profile FILE` | MySQL config file |
 | `-h, --help` | Display help |
 | `-V, --version` | Display version |
+
+---
+
+## mysql.updates
+
+Show database and table modification timestamps using `information_schema.TABLES`.
+
+```bash
+mysql.updates [OPTIONS] [DATABASE] [TABLE...]
+```
+
+**Examples:**
+
+```bash
+mysql.updates                        # Show all database update times
+mysql.updates mydb                   # Show table update times in mydb
+mysql.updates mydb users             # Show update time of users table
+mysql.updates mydb users orders      # Show update time of multiple tables
+mysql.updates -f json mydb           # Export as JSON
+mysql.updates -a mydb                # Hide relative age column
+```
+
+**Output:**
+
+```
+=== Table Updates: mydb ===
++-----------+--------+---------------------+--------+---------------------+-------+
+| Table     | Engine | Updated             | Age    | Created             |  Rows |
++-----------+--------+---------------------+--------+---------------------+-------+
+| users     | MyISAM | 2026-01-17 10:30:45 | 2h ago | 2025-01-01 00:00:00 | 1,234 |
+| sessions  | InnoDB | -                   | Never  | 2025-01-01 00:00:00 |45,678 |
++-----------+--------+---------------------+--------+---------------------+-------+
+Note: InnoDB tables may show NULL for UPDATE_TIME (MySQL limitation)
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-f, --format FMT` | Output format: table (default), json, csv |
+| `-n, --no-color` | Disable colorized output |
+| `-a, --absolute` | Hide relative age column |
+| `-o, --output FILE` | Write output to file |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+**Note:** InnoDB tables may show NULL for UPDATE_TIME due to a MySQL limitation. The Engine column helps identify which tables are affected.
 
 ---
 

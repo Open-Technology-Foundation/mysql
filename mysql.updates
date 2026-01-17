@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+# Show database and table modification timestamps.
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+declare -r VERSION=1.0.0
+declare -r SCRIPT_NAME=${0##*/}
+
+# Configuration
+declare -- PROFILE=${PROFILE:-} DATABASE=${DATABASE:-} FORMAT=${FORMAT:-table} OUTPUT_FILE=${OUTPUT_FILE:-}
+declare -a TABLES=()
+declare -i NO_COLOR=0 SHOW_AGE=1
+
+# ANSI colors
+declare -- RESET='' BOLD='' RED='' GREEN='' YELLOW='' CYAN=''
+
+init_colors() {
+  if [[ -t 1 && -t 2 ]] && ((! NO_COLOR)); then
+    RESET=$'\033[0m' BOLD=$'\033[1m' RED=$'\033[31m' GREEN=$'\033[32m' YELLOW=$'\033[33m' CYAN=$'\033[36m'
+  fi
+}
+
+show_help() {
+  cat <<HELP
+Usage: $SCRIPT_NAME [OPTIONS] [DATABASE] [TABLE...]
+
+Show database and table modification timestamps.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -f, --format FMT     Output format: table (default), json, csv
+  -n, --no-color       Disable colorized output
+  -a, --absolute       Hide relative age column
+  -o, --output FILE    Write output to file
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME                       Show all database update times
+  $SCRIPT_NAME mydb                  Show table update times in mydb
+  $SCRIPT_NAME mydb users            Show update time of users table
+  $SCRIPT_NAME mydb users orders     Show update time of multiple tables
+  $SCRIPT_NAME -f json mydb          Export as JSON
+HELP
+}
+
+# Helper to run mysql commands
+run_mysql() {
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} "$@"
+}
+
+# Validate MySQL identifier to prevent SQL injection
+validate_mysql_identifier() {
+  local -- name=$1
+  if [[ ! $name =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    >&2 echo "▲ Invalid identifier: ${name@Q}"
+    exit 22
+  fi
+}
+
+# Convert timestamp to relative time string
+format_relative_time() {
+  local -- timestamp=$1
+  local -i now diff
+
+  [[ -n $timestamp && $timestamp != NULL ]] || { echo 'Never'; return; }
+
+  now=$(date +%s)
+  diff=$(( now - $(date -d "$timestamp" +%s 2>/dev/null || echo "$now") ))
+
+  if (( diff < 0 )); then
+    echo 'Future'
+  elif (( diff < 60 )); then
+    echo "${diff}s ago"
+  elif (( diff < 3600 )); then
+    echo "$(( diff / 60 ))m ago"
+  elif (( diff < 86400 )); then
+    echo "$(( diff / 3600 ))h ago"
+  elif (( diff < 604800 )); then
+    echo "$(( diff / 86400 ))d ago"
+  elif (( diff < 2592000 )); then
+    echo "$(( diff / 604800 ))w ago"
+  elif (( diff < 31536000 )); then
+    echo "$(( diff / 2592000 ))mo ago"
+  else
+    echo "$(( diff / 31536000 ))y ago"
+  fi
+}
+
+# Colorize age based on recency
+colorize_age() {
+  local -- age=$1
+  ((NO_COLOR)) && { echo "$age"; return; }
+
+  case "$age" in
+    Never|NULL|-)
+      echo "${YELLOW}${age}${RESET}" ;;
+    *s\ ago|*m\ ago|*h\ ago)
+      echo "${GREEN}${age}${RESET}" ;;
+    *d\ ago)
+      echo "${CYAN}${age}${RESET}" ;;
+    *w\ ago|*mo\ ago)
+      echo "${YELLOW}${age}${RESET}" ;;
+    *)
+      echo "${RED}${age}${RESET}" ;;
+  esac
+}
+
+# Format number with commas
+format_number() {
+  local -- num=$1
+  [[ -n $num && $num != NULL ]] || { echo '-'; return; }
+  printf "%'d" "$num" 2>/dev/null || echo "$num"
+}
+
+# CSV field escaping
+_csv_field() {
+  local -- field=$1
+  if [[ $field == *,* || $field == *\"* || $field == *$'\n'* ]]; then
+    field=${field//\"/\"\"}
+    echo "\"$field\""
+  else
+    echo "$field"
+  fi
+}
+
+# Show all databases with update times
+show_all_databases() {
+  echo '=== Database Updates ==='
+
+  if [[ $FORMAT == json ]]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      >&2 echo '✗ jq is required for JSON output'
+      exit 18
+    fi
+    local -- json_output
+    json_output=$(run_mysql -N -e "
+      SELECT JSON_ARRAYAGG(JSON_OBJECT(
+        'database', TABLE_SCHEMA,
+        'tables', table_count,
+        'last_updated', last_updated,
+        'last_created', last_created
+      ))
+      FROM (
+        SELECT
+          TABLE_SCHEMA,
+          COUNT(*) AS table_count,
+          MAX(UPDATE_TIME) AS last_updated,
+          MAX(CREATE_TIME) AS last_created
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+        GROUP BY TABLE_SCHEMA
+        ORDER BY MAX(UPDATE_TIME) DESC, TABLE_SCHEMA
+      ) AS db_stats
+    ")
+    if [[ -n $OUTPUT_FILE ]]; then
+      echo "$json_output" | jq '.' > "$OUTPUT_FILE"
+      echo "JSON data exported to $OUTPUT_FILE"
+    else
+      echo "$json_output" | jq '.'
+    fi
+    return
+  fi
+
+  if [[ $FORMAT == csv ]]; then
+    local -- output=''
+    if ((SHOW_AGE)); then
+      output+="Database,Tables,Last Updated,Age,Last Created"$'\n'
+    else
+      output+="Database,Tables,Last Updated,Last Created"$'\n'
+    fi
+
+    while IFS=$'\t' read -r db tables updated created; do
+      [[ -n $db ]] || continue
+      local -- age
+      age=$(format_relative_time "$updated")
+      if ((SHOW_AGE)); then
+        output+="$(_csv_field "$db"),$tables,$(_csv_field "$updated"),$(_csv_field "$age"),$(_csv_field "$created")"$'\n'
+      else
+        output+="$(_csv_field "$db"),$tables,$(_csv_field "$updated"),$(_csv_field "$created")"$'\n'
+      fi
+    done < <(run_mysql -N -e "
+      SELECT
+        TABLE_SCHEMA,
+        COUNT(*),
+        IFNULL(MAX(UPDATE_TIME), '-'),
+        IFNULL(MAX(CREATE_TIME), '-')
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+      GROUP BY TABLE_SCHEMA
+      ORDER BY MAX(UPDATE_TIME) DESC, TABLE_SCHEMA
+    ")
+
+    if [[ -n $OUTPUT_FILE ]]; then
+      printf '%s' "$output" > "$OUTPUT_FILE"
+      echo "CSV data exported to $OUTPUT_FILE"
+    else
+      printf '%s' "$output"
+    fi
+    return
+  fi
+
+  # Table format
+  local -a rows=()
+  local -i max_db=8 max_tables=6 max_updated=12 max_age=5 max_created=12
+
+  while IFS=$'\t' read -r db tables updated created; do
+    [[ -n $db ]] || continue
+    local -- age
+    age=$(format_relative_time "$updated")
+    [[ $updated == - ]] && updated='-'
+    [[ $created == - ]] && created='-'
+
+    (( ${#db} > max_db )) && max_db=${#db}
+    (( ${#tables} > max_tables )) && max_tables=${#tables}
+    (( ${#updated} > max_updated )) && max_updated=${#updated}
+    (( ${#age} > max_age )) && max_age=${#age}
+    (( ${#created} > max_created )) && max_created=${#created}
+
+    rows+=("$db"$'\t'"$tables"$'\t'"$updated"$'\t'"$age"$'\t'"$created")
+  done < <(run_mysql -N -e "
+    SELECT
+      TABLE_SCHEMA,
+      COUNT(*),
+      IFNULL(MAX(UPDATE_TIME), '-'),
+      IFNULL(MAX(CREATE_TIME), '-')
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+    GROUP BY TABLE_SCHEMA
+    ORDER BY MAX(UPDATE_TIME) DESC, TABLE_SCHEMA
+  ")
+
+  # Print header
+  local -- sep
+  if ((SHOW_AGE)); then
+    sep=$(printf '+-%*s-+-%*s-+-%*s-+-%*s-+-%*s-+' "$max_db" '' "$max_tables" '' "$max_updated" '' "$max_age" '' "$max_created" '' | tr ' ' '-')
+  else
+    sep=$(printf '+-%*s-+-%*s-+-%*s-+-%*s-+' "$max_db" '' "$max_tables" '' "$max_updated" '' "$max_created" '' | tr ' ' '-')
+  fi
+  echo "$sep"
+
+  if ((SHOW_AGE)); then
+    printf "| ${BOLD}%-${max_db}s${RESET} | ${BOLD}%-${max_tables}s${RESET} | ${BOLD}%-${max_updated}s${RESET} | ${BOLD}%-${max_age}s${RESET} | ${BOLD}%-${max_created}s${RESET} |\n" \
+      'Database' 'Tables' 'Last Updated' 'Age' 'Last Created'
+  else
+    printf "| ${BOLD}%-${max_db}s${RESET} | ${BOLD}%-${max_tables}s${RESET} | ${BOLD}%-${max_updated}s${RESET} | ${BOLD}%-${max_created}s${RESET} |\n" \
+      'Database' 'Tables' 'Last Updated' 'Last Created'
+  fi
+  echo "$sep"
+
+  # Print rows
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r db tables updated age created <<< "$row"
+    local -- colored_age
+    colored_age=$(colorize_age "$age")
+
+    if ((SHOW_AGE)); then
+      printf "| %-${max_db}s | %${max_tables}s | %-${max_updated}s | %s%*s | %-${max_created}s |\n" \
+        "$db" "$tables" "$updated" "$colored_age" "$((max_age - ${#age}))" '' "$created"
+    else
+      printf "| %-${max_db}s | %${max_tables}s | %-${max_updated}s | %-${max_created}s |\n" \
+        "$db" "$tables" "$updated" "$created"
+    fi
+  done
+
+  echo "$sep"
+}
+
+# Show tables in a database with update times
+show_database_tables() {
+  local -- database=$1
+  shift
+  local -a filter_tables=("$@")
+
+  echo "=== Table Updates: $database ==="
+
+  local -- where_clause=""
+  if ((${#filter_tables[@]})); then
+    local -- table_list
+    table_list=$(printf "'%s'," "${filter_tables[@]}")
+    table_list=${table_list%,}
+    where_clause="AND TABLE_NAME IN ($table_list)"
+  fi
+
+  if [[ $FORMAT == json ]]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      >&2 echo '✗ jq is required for JSON output'
+      exit 18
+    fi
+    local -- json_output
+    json_output=$(run_mysql -N -e "
+      SELECT JSON_ARRAYAGG(JSON_OBJECT(
+        'table', TABLE_NAME,
+        'engine', ENGINE,
+        'updated', UPDATE_TIME,
+        'created', CREATE_TIME,
+        'rows', TABLE_ROWS
+      ))
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = '$database' $where_clause
+      ORDER BY UPDATE_TIME DESC, TABLE_NAME
+    ")
+    if [[ -n $OUTPUT_FILE ]]; then
+      echo "$json_output" | jq '.' > "$OUTPUT_FILE"
+      echo "JSON data exported to $OUTPUT_FILE"
+    else
+      echo "$json_output" | jq '.'
+    fi
+    return
+  fi
+
+  if [[ $FORMAT == csv ]]; then
+    local -- output=''
+    if ((SHOW_AGE)); then
+      output+="Table,Engine,Updated,Age,Created,Rows"$'\n'
+    else
+      output+="Table,Engine,Updated,Created,Rows"$'\n'
+    fi
+
+    while IFS=$'\t' read -r tbl engine updated created rows; do
+      [[ -n $tbl ]] || continue
+      local -- age
+      age=$(format_relative_time "$updated")
+      [[ $updated == NULL ]] && updated='-'
+      [[ $created == NULL ]] && created='-'
+      [[ $rows == NULL ]] && rows='-'
+      if ((SHOW_AGE)); then
+        output+="$(_csv_field "$tbl"),$(_csv_field "$engine"),$(_csv_field "$updated"),$(_csv_field "$age"),$(_csv_field "$created"),$rows"$'\n'
+      else
+        output+="$(_csv_field "$tbl"),$(_csv_field "$engine"),$(_csv_field "$updated"),$(_csv_field "$created"),$rows"$'\n'
+      fi
+    done < <(run_mysql -N -e "
+      SELECT
+        TABLE_NAME,
+        IFNULL(ENGINE, '-'),
+        IFNULL(UPDATE_TIME, 'NULL'),
+        IFNULL(CREATE_TIME, 'NULL'),
+        IFNULL(TABLE_ROWS, 'NULL')
+      FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = '$database' $where_clause
+      ORDER BY UPDATE_TIME DESC, TABLE_NAME
+    ")
+
+    if [[ -n $OUTPUT_FILE ]]; then
+      printf '%s' "$output" > "$OUTPUT_FILE"
+      echo "CSV data exported to $OUTPUT_FILE"
+    else
+      printf '%s' "$output"
+    fi
+    return
+  fi
+
+  # Table format
+  local -a rows=()
+  local -i max_tbl=5 max_engine=6 max_updated=7 max_age=5 max_created=7 max_rows=4
+  local -i has_innodb=0
+
+  while IFS=$'\t' read -r tbl engine updated created tbl_rows; do
+    [[ -n $tbl ]] || continue
+    local -- age formatted_rows
+    age=$(format_relative_time "$updated")
+    [[ $updated == NULL ]] && updated='-'
+    [[ $created == NULL ]] && created='-'
+    formatted_rows=$(format_number "$tbl_rows")
+
+    [[ $engine == InnoDB && $updated == - ]] && has_innodb=1
+
+    (( ${#tbl} > max_tbl )) && max_tbl=${#tbl}
+    (( ${#engine} > max_engine )) && max_engine=${#engine}
+    (( ${#updated} > max_updated )) && max_updated=${#updated}
+    (( ${#age} > max_age )) && max_age=${#age}
+    (( ${#created} > max_created )) && max_created=${#created}
+    (( ${#formatted_rows} > max_rows )) && max_rows=${#formatted_rows}
+
+    rows+=("$tbl"$'\t'"$engine"$'\t'"$updated"$'\t'"$age"$'\t'"$created"$'\t'"$formatted_rows")
+  done < <(run_mysql -N -e "
+    SELECT
+      TABLE_NAME,
+      IFNULL(ENGINE, '-'),
+      IFNULL(UPDATE_TIME, 'NULL'),
+      IFNULL(CREATE_TIME, 'NULL'),
+      IFNULL(TABLE_ROWS, 'NULL')
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '$database' $where_clause
+    ORDER BY UPDATE_TIME DESC, TABLE_NAME
+  ")
+
+  ((${#rows[@]})) || { echo 'No tables found.'; return; }
+
+  # Print header
+  local -- sep
+  if ((SHOW_AGE)); then
+    sep=$(printf '+-%*s-+-%*s-+-%*s-+-%*s-+-%*s-+-%*s-+' "$max_tbl" '' "$max_engine" '' "$max_updated" '' "$max_age" '' "$max_created" '' "$max_rows" '' | tr ' ' '-')
+  else
+    sep=$(printf '+-%*s-+-%*s-+-%*s-+-%*s-+-%*s-+' "$max_tbl" '' "$max_engine" '' "$max_updated" '' "$max_created" '' "$max_rows" '' | tr ' ' '-')
+  fi
+  echo "$sep"
+
+  if ((SHOW_AGE)); then
+    printf "| ${BOLD}%-${max_tbl}s${RESET} | ${BOLD}%-${max_engine}s${RESET} | ${BOLD}%-${max_updated}s${RESET} | ${BOLD}%-${max_age}s${RESET} | ${BOLD}%-${max_created}s${RESET} | ${BOLD}%${max_rows}s${RESET} |\n" \
+      'Table' 'Engine' 'Updated' 'Age' 'Created' 'Rows'
+  else
+    printf "| ${BOLD}%-${max_tbl}s${RESET} | ${BOLD}%-${max_engine}s${RESET} | ${BOLD}%-${max_updated}s${RESET} | ${BOLD}%-${max_created}s${RESET} | ${BOLD}%${max_rows}s${RESET} |\n" \
+      'Table' 'Engine' 'Updated' 'Created' 'Rows'
+  fi
+  echo "$sep"
+
+  # Print rows
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r tbl engine updated age created tbl_rows <<< "$row"
+    local -- colored_age
+    colored_age=$(colorize_age "$age")
+
+    if ((SHOW_AGE)); then
+      printf "| %-${max_tbl}s | %-${max_engine}s | %-${max_updated}s | %s%*s | %-${max_created}s | %${max_rows}s |\n" \
+        "$tbl" "$engine" "$updated" "$colored_age" "$((max_age - ${#age}))" '' "$created" "$tbl_rows"
+    else
+      printf "| %-${max_tbl}s | %-${max_engine}s | %-${max_updated}s | %-${max_created}s | %${max_rows}s |\n" \
+        "$tbl" "$engine" "$updated" "$created" "$tbl_rows"
+    fi
+  done
+
+  echo "$sep"
+
+  # InnoDB note
+  ((has_innodb)) && echo "${YELLOW}Note:${RESET} InnoDB tables may show NULL for UPDATE_TIME (MySQL limitation)"
+}
+
+# Validate identifiers if provided
+validate_args() {
+  if [[ -n $DATABASE ]]; then
+    validate_mysql_identifier "$DATABASE"
+    for table in "${TABLES[@]}"; do
+      validate_mysql_identifier "$table"
+    done
+  fi
+}
+
+# Parse arguments
+while (($#)); do
+  case $1 in
+    -p|--profile)  shift; PROFILE=${1:-} ;;
+    -f|--format)   shift; FORMAT=${1:-} ;;
+    -n|--no-color) NO_COLOR=1 ;;
+    -a|--absolute) SHOW_AGE=0 ;;
+    -o|--output)   shift; OUTPUT_FILE=${1:-} ;;
+    -h|--help)     show_help; exit 0 ;;
+    -V|--version)  echo "$SCRIPT_NAME $VERSION"; exit 0 ;;
+    -*)            >&2 echo "Invalid option ${1@Q}"; exit 22 ;;
+    *)             [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
+  esac
+  shift
+done
+
+# Initialize colors
+init_colors
+
+# Validate format
+case "$FORMAT" in
+  table|json|csv) ;;
+  *) >&2 echo "Invalid format ${FORMAT@Q} (use table, json, or csv)"; exit 22 ;;
+esac
+
+# Validate arguments
+validate_args
+
+# Check mysql client
+command -v mysql >/dev/null 2>&1 || { >&2 echo '✗ MySQL client not found'; exit 18; }
+
+# Main logic
+if [[ -z $DATABASE ]]; then
+  show_all_databases
+elif ((${#TABLES[@]} == 0)); then
+  show_database_tables "$DATABASE"
+else
+  show_database_tables "$DATABASE" "${TABLES[@]}"
+fi
+
+#fin

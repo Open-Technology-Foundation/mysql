@@ -367,12 +367,64 @@ _mysql_size() {
     fi
 }
 
+_mysql_updates() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--profile --format --no-color --absolute --output --version --help"
+    short_opts="-p -f -n -a -o -V -h"
+
+    case "${prev}" in
+        --profile|-p|--output|-o)
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+        --format|-f)
+            mapfile -t COMPREPLY < <(compgen -W "table json csv" -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    # Database/table completion
+    if command -v mysql >/dev/null 2>&1; then
+        local -i i
+        local database=""
+        for ((i=1; i < COMP_CWORD; i++)); do
+            case "${COMP_WORDS[i]}" in
+                -p|--profile|-f|--format|-o|--output) ((i++)) ;;
+                -*) ;;
+                *) [[ -z $database ]] && database="${COMP_WORDS[i]}" ;;
+            esac
+        done
+
+        if [[ -z $database ]]; then
+            local databases
+            databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
+            mapfile -t COMPREPLY < <(compgen -W "${databases}" -- "${cur}")
+        else
+            local tables
+            tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
+            mapfile -t COMPREPLY < <(compgen -W "${tables}" -- "${cur}")
+        fi
+    fi
+}
+
 # Register completion functions
 complete -F _mysql_display_structure mysql.display-structure
 complete -F _mysql_tables mysql.tables
 complete -F _mysql_databases mysql.databases
 complete -F _mysql_indexes mysql.indexes
 complete -F _mysql_size mysql.size
+complete -F _mysql_updates mysql.updates
 complete -F _mysql_status mysql.status
 complete -F _mysql_users mysql.users
 complete -F _mysql_grants mysql.grants
