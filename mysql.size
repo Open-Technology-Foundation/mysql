@@ -44,19 +44,22 @@ run_mysql() {
   mysql ${PROFILE:+--defaults-file="$PROFILE"} "$@"
 }
 
-# Format bytes to human-readable
-format_size() {
-  local -i bytes=$1
-  if ((bytes >= 1073741824)); then
-    awk "BEGIN {printf \"%.2f GB\", $bytes / 1073741824}"
-  elif ((bytes >= 1048576)); then
-    awk "BEGIN {printf \"%.2f MB\", $bytes / 1048576}"
-  elif ((bytes >= 1024)); then
-    awk "BEGIN {printf \"%.2f KB\", $bytes / 1024}"
-  else
-    echo "${bytes} B"
+# Validate MySQL identifier to prevent SQL injection
+validate_mysql_identifier() {
+  local name=$1
+  if [[ ! $name =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    >&2 echo "▲ Invalid identifier: ${name@Q}"
+    exit 22
   fi
 }
+
+# Validate identifiers if provided
+if [[ -n $DATABASE ]]; then
+  validate_mysql_identifier "$DATABASE"
+  for table in "${TABLES[@]}"; do
+    validate_mysql_identifier "$table"
+  done
+fi
 
 if [[ -z $DATABASE ]]; then
   # Show all database sizes
