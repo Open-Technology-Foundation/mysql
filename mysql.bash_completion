@@ -418,7 +418,68 @@ _mysql_updates() {
     fi
 }
 
+_mysql_field_comment() {
+    local cur prev opts short_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--profile --dry-run --version --help"
+    short_opts="-p -n -V -h"
+
+    case "${prev}" in
+        --profile|-p)
+            mapfile -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    case "${cur}" in
+        -*)
+            mapfile -t COMPREPLY < <(compgen -W "${opts} ${short_opts}" -- "${cur}")
+            return 0
+            ;;
+    esac
+
+    # Database/table/field completion
+    if command -v mysql >/dev/null 2>&1; then
+        local -i i
+        local database="" table=""
+        for ((i=1; i < COMP_CWORD; i++)); do
+            case "${COMP_WORDS[i]}" in
+                -p|--profile) ((i++)) ;;
+                -*) ;;
+                *)
+                    if [[ -z $database ]]; then
+                        database="${COMP_WORDS[i]}"
+                    elif [[ -z $table ]]; then
+                        table="${COMP_WORDS[i]}"
+                    fi
+                    ;;
+            esac
+        done
+
+        if [[ -z $database ]]; then
+            # Complete database names
+            local databases
+            databases=$(mysql -e "SHOW DATABASES;" 2>/dev/null | tail -n +2 | grep -Ev '^(information_schema|performance_schema|mysql|sys)$')
+            mapfile -t COMPREPLY < <(compgen -W "${databases}" -- "${cur}")
+        elif [[ -z $table ]]; then
+            # Complete table names
+            local tables
+            tables=$(mysql "${database}" -e "SHOW TABLES;" 2>/dev/null | tail -n +2)
+            mapfile -t COMPREPLY < <(compgen -W "${tables}" -- "${cur}")
+        else
+            # Complete column/field names
+            local fields
+            fields=$(mysql "${database}" -N -e "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='${database}' AND TABLE_NAME='${table}'" 2>/dev/null)
+            mapfile -t COMPREPLY < <(compgen -W "${fields}" -- "${cur}")
+        fi
+    fi
+}
+
 # Register completion functions
+complete -F _mysql_field_comment mysql.field-comment
 complete -F _mysql_display_structure mysql.display-structure
 complete -F _mysql_tables mysql.tables
 complete -F _mysql_databases mysql.databases
