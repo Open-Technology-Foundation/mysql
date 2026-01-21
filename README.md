@@ -310,6 +310,9 @@ mysql.display-structure mydb users -c Field,Type,Null
 # Show statistics (row count, size, indexes)
 mysql.display-structure mydb users -s
 
+# Show column comments
+mysql.display-structure mydb users -C
+
 # Export formats
 mysql.display-structure mydb users -f json
 mysql.display-structure mydb users -f json -o structure.json
@@ -376,6 +379,7 @@ Options shared by schema inspection utilities (`mysql.databases`, `mysql.tables`
 | `-c, --columns COLS` | Comma-separated list of columns to display |
 | `-f, --format FMT` | Output format: table (default), json, csv |
 | `-s, --stats` | Show table statistics (row count, size, indexes) |
+| `-C, --comments` | Include column comments in output |
 | `-n, --no-color` | Disable colorized output |
 | `-o, --output FILE` | Write output to file |
 | `-h, --help` | Display help |
