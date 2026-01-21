@@ -8,8 +8,8 @@ _mysql_display_structure() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available options
-    opts="--profile --columns --format --stats --no-color --no-cache --output --version --help"
-    short_opts="-p -c -f -s -n -N -o -V -h"
+    opts="--profile --columns --format --stats --comments --no-color --no-cache --output --version --help"
+    short_opts="-p -c -f -s -C -n -N -o -V -h"
 
     case "${prev}" in
         --profile|-p)
@@ -22,8 +22,8 @@ _mysql_display_structure() {
             return 0
             ;;
         --columns|-c)
-            # Common MySQL SHOW COLUMNS field names
-            mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra" -- "${cur}")
+            # Common MySQL SHOW COLUMNS field names (Comment available with -C)
+            mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra Comment" -- "${cur}")
             return 0
             ;;
         --output|-o)
