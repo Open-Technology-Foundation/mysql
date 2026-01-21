@@ -9,6 +9,7 @@ Bash utilities for MySQL database inspection with formatted output, colorization
 | `mysql.databases` | List databases, or cascade to tables/structure |
 | `mysql.tables` | List tables in a database, or show table structure |
 | `mysql.display-structure` | Display detailed table structure with formatting |
+| `mysql.field-comment` | Read or set column comments |
 | `mysql.indexes` | Display index information for tables |
 | `mysql.size` | Show database and table sizes |
 | `mysql.updates` | Show database and table modification timestamps |
@@ -320,6 +321,48 @@ mysql.display-structure mydb users -n
 # Pipe mode (from mysql output)
 mysql mydb -e 'SHOW COLUMNS FROM users' | mysql.display-structure
 ```
+
+---
+
+## mysql.field-comment
+
+Read or set MySQL column comments.
+
+```bash
+mysql.field-comment [OPTIONS] DATABASE TABLE FIELD [COMMENT]
+```
+
+**Examples:**
+
+```bash
+# Read current comment
+mysql.field-comment mydb users email
+
+# Set a comment
+mysql.field-comment mydb users email "Primary email address"
+mysql.field-comment mydb orders status "Status: 1=pending, 2=shipped, 3=delivered"
+
+# Dry-run (preview SQL without executing)
+mysql.field-comment -n mydb users id "User ID"
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-p, --profile FILE` | MySQL config file |
+| `-n, --dry-run` | Show SQL without executing (set mode only) |
+| `-h, --help` | Display help |
+| `-V, --version` | Display version |
+
+**Notes:**
+
+When setting comments, the following column types are not supported:
+- Columns with `ON UPDATE CURRENT_TIMESTAMP`
+- Spatial types (geometry, point, polygon, etc.)
+- JSON columns
+- Generated/virtual columns
+- Partitioned tables
 
 ---
 
