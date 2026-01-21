@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# mysql.field-comment - Read, add, or modify a MySQL column comment
+# Usage: mysql.field-comment [OPTIONS] DATABASE TABLE FIELD [COMMENT]
+set -euo pipefail
+shopt -s inherit_errexit shift_verbose extglob nullglob
+
+declare -r VERSION=1.0.0
+declare -r SCRIPT_DIR=${0%/*} SCRIPT_NAME=${0##*/}
+
+# Configuration (modifiable by arguments)
+declare -- DATABASE= TABLE= FIELD= COMMENT= PROFILE=${PROFILE:-}
+declare -i DRY_RUN=0 NO_COLOR=0
+
+# ANSI colors (terminal-aware, can be disabled with NO_COLOR)
+declare -- RESET='' BOLD='' RED='' GREEN='' YELLOW='' CYAN=''
+
+init_colors() {
+  if [[ -t 1 && -t 2 ]] && ((! NO_COLOR)); then
+    RESET=$'\033[0m' BOLD=$'\033[1m' RED=$'\033[31m' GREEN=$'\033[32m' YELLOW=$'\033[33m' CYAN=$'\033[36m'
+  fi
+}
+
+# Messaging functions
+_msg() {
+  local -- prefix="$SCRIPT_NAME:" msg
+  case ${FUNCNAME[1]} in
+    info)  prefix+=" ${CYAN}◉${RESET}" ;;
+    warn)  prefix+=" ${YELLOW}▲${RESET}" ;;
+    error) prefix+=" ${RED}✗${RESET}" ;;
+  esac
+  for msg in "$@"; do printf '%s %s\n' "$prefix" "$msg"; done
+}
+
+info() { >&2 _msg "$@"; }
+warn() { >&2 _msg "$@"; }
+error() { >&2 _msg "$@"; }
+die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
+noarg() { (($# > 1)) || die 22 "Option ${1:-} requires an argument"; }
+
+# Validate MySQL identifier to prevent SQL injection
+validate_mysql_identifier() {
+  local -- name="$1" type="${2:-identifier}"
+  [[ -n $name ]] || die 22 "Empty $type name"
+  [[ $name =~ ^[a-zA-Z0-9_\$-]+$ ]] || die 22 "Invalid $type name ${name@Q} (contains unsafe characters)"
+}
+
+usage() {
+  cat <<HELP
+Usage: $SCRIPT_NAME [OPTIONS] DATABASE TABLE FIELD [COMMENT]
+
+Read, add, or modify a MySQL column comment.
+
+If COMMENT is omitted, displays the current comment for the field.
+If COMMENT is provided, sets or updates the column comment.
+
+OPTIONS:
+  -p, --profile FILE   MySQL config file (default: ~/.my.cnf)
+  -n, --dry-run        Show SQL without executing (set mode only)
+  -h, --help           Display this help message
+  -V, --version        Display version information
+
+EXAMPLES:
+  $SCRIPT_NAME mydb users email              # Show current comment
+  $SCRIPT_NAME mydb users email "Primary email address"
+  $SCRIPT_NAME mydb orders Status "Order status: 1=pending, 2=shipped"
+  $SCRIPT_NAME -n mydb users id "Test comment"
+  $SCRIPT_NAME -p ~/.mysql/prod.cnf mydb users name "Full name"
+
+NOTES:
+  When setting comments, the following column types are not supported:
+    - Columns with ON UPDATE CURRENT_TIMESTAMP
+    - Spatial types (geometry, point, polygon, etc.)
+    - JSON columns
+    - Generated/virtual columns
+    - Partitioned tables
+HELP
+}
+
+# Get column metadata from INFORMATION_SCHEMA
+get_column_info() {
+  local -- db=$1 table=$2 field=$3
+
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} -sN "$db" -e "
+    SELECT
+      COLUMN_TYPE,
+      IS_NULLABLE,
+      IFNULL(COLUMN_DEFAULT, ''),
+      EXTRA,
+      DATA_TYPE,
+      IFNULL(GENERATION_EXPRESSION, '')
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = '$db'
+      AND TABLE_NAME = '$table'
+      AND COLUMN_NAME = '$field'
+  "
+}
+
+# Get current column comment from INFORMATION_SCHEMA
+get_field_comment() {
+  local -- db=$1 table=$2 field=$3
+
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} -sN "$db" -e "
+    SELECT COLUMN_COMMENT
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = '$db'
+      AND TABLE_NAME = '$table'
+      AND COLUMN_NAME = '$field'
+  "
+}
+
+# Check for unsupported column types
+check_unsupported() {
+  local -- extra=$1 data_type=$2 db=$3 table=$4
+  local -- partition_count
+
+  # Check for ON UPDATE CURRENT_TIMESTAMP
+  if [[ ${extra,,} == *"on update"* ]]; then
+    die 1 "Columns with ON UPDATE CURRENT_TIMESTAMP not supported"
+  fi
+
+  # Check for spatial types
+  local -- spatial_types="geometry point linestring polygon multipoint multilinestring multipolygon geometrycollection"
+  if [[ " $spatial_types " == *" ${data_type,,} "* ]]; then
+    die 1 "Spatial column type ${data_type@Q} not supported"
+  fi
+
+  # Check for JSON type
+  if [[ ${data_type,,} == "json" ]]; then
+    die 1 "JSON column type not supported"
+  fi
+
+  # Check for generated columns
+  if [[ ${extra,,} == *"virtual"* || ${extra,,} == *"stored"* ]]; then
+    die 1 "Generated/virtual columns not supported"
+  fi
+
+  # Check if table is partitioned
+  partition_count=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} -sN "$db" -e "
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS
+    WHERE TABLE_SCHEMA = '$db'
+      AND TABLE_NAME = '$table'
+      AND PARTITION_NAME IS NOT NULL
+  ")
+  if (( partition_count > 0 )); then
+    die 1 "Partitioned tables not supported"
+  fi
+}
+
+# Build ALTER TABLE MODIFY statement
+build_alter_sql() {
+  local -- table=$1 field=$2 col_type=$3 is_nullable=$4
+  local -- col_default=$5 extra=$6 comment=$7
+
+  # Escape single quotes in comment
+  local -- escaped_comment=${comment//\'/\'\'}
+
+  local -- sql="ALTER TABLE \`$table\` MODIFY \`$field\` $col_type"
+
+  # NULL constraint
+  [[ $is_nullable == "NO" ]] && sql+=" NOT NULL" || sql+=" NULL"
+
+  # Handle DEFAULT
+  if [[ -n $col_default ]]; then
+    if [[ ${extra,,} == *"default_generated"* ]]; then
+      # Expression default (CURRENT_TIMESTAMP, etc)
+      sql+=" DEFAULT $col_default"
+    else
+      local -- escaped_default=${col_default//\'/\'\'}
+      sql+=" DEFAULT '$escaped_default'"
+    fi
+  elif [[ $is_nullable == "YES" ]]; then
+    sql+=" DEFAULT NULL"
+  fi
+
+  # Handle AUTO_INCREMENT
+  [[ ${extra,,} == *"auto_increment"* ]] && sql+=" AUTO_INCREMENT"
+
+  sql+=" COMMENT '$escaped_comment';"
+
+  echo "$sql"
+}
+
+# Process the field comment operation
+process_field_comment() {
+  local -- col_info modify_sql
+  local -- col_type is_nullable col_default extra data_type _gen_expr
+
+  # Query column metadata
+  col_info=$(get_column_info "$DATABASE" "$TABLE" "$FIELD") || die 1 "Failed to query column metadata"
+
+  [[ -n $col_info ]] || die 1 "Field ${FIELD@Q} not found in $DATABASE.$TABLE"
+
+  # Parse result (gen_expr fetched but unused - we reject generated columns)
+  IFS=$'\t' read -r col_type is_nullable col_default extra data_type _gen_expr <<< "$col_info"
+
+  # Check for unsupported column types
+  check_unsupported "$extra" "$data_type" "$DATABASE" "$TABLE"
+
+  # Build ALTER statement
+  modify_sql=$(build_alter_sql "$TABLE" "$FIELD" "$col_type" "$is_nullable" "$col_default" "$extra" "$COMMENT")
+
+  if (( DRY_RUN )); then
+    info "[DRY-RUN] $modify_sql"
+    return 0
+  fi
+
+  info "Executing: $modify_sql"
+  mysql ${PROFILE:+--defaults-file="$PROFILE"} "$DATABASE" -e "$modify_sql" || die 1 "ALTER TABLE failed"
+  info "Done."
+}
+
+main() {
+  local -a positional=()
+
+  # Parse arguments
+  while (($#)); do
+    case $1 in
+      -p|--profile)  noarg "$@"; shift; PROFILE=$1 ;;
+      -n|--dry-run)  DRY_RUN=1 ;;
+      -V|--version)  echo "$SCRIPT_NAME $VERSION"; return 0 ;;
+      -h|--help)     usage; return 0 ;;
+      -[pnVh]?*)     set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+      -*)            die 22 "Invalid option ${1@Q}" ;;
+      *)             positional+=("$1") ;;
+    esac
+    shift
+  done
+
+  # Validate profile file if specified
+  if [[ -n $PROFILE ]]; then
+    [[ -r $PROFILE ]] || die 2 "Profile file not readable: $PROFILE"
+  fi
+
+  # Initialize colors after parsing (NO_COLOR may be set)
+  init_colors
+
+  # Check positional arguments
+  (( ${#positional[@]} >= 3 )) || { usage; die 22 "Requires DATABASE TABLE FIELD arguments"; }
+
+  DATABASE=${positional[0]}
+  TABLE=${positional[1]}
+  FIELD=${positional[2]}
+  COMMENT=${positional[3]:-}
+
+  # Validate identifiers to prevent SQL injection
+  validate_mysql_identifier "$DATABASE" 'database'
+  validate_mysql_identifier "$TABLE" 'table'
+  validate_mysql_identifier "$FIELD" 'field'
+
+  # Check mysql client
+  command -v mysql >/dev/null 2>&1 || die 18 'MySQL client not found'
+
+  if [[ -z $COMMENT ]]; then
+    # Read mode: display current comment
+    local -- current
+    current=$(get_field_comment "$DATABASE" "$TABLE" "$FIELD")
+    # Check if result is empty because field doesn't exist
+    if [[ -z $current ]]; then
+      # Verify field exists by checking column info
+      local -- col_info
+      col_info=$(get_column_info "$DATABASE" "$TABLE" "$FIELD")
+      [[ -n $col_info ]] || die 1 "Field ${FIELD@Q} not found in $DATABASE.$TABLE"
+      echo "(no comment)"
+    else
+      echo "$current"
+    fi
+  else
+    # Set mode: update comment
+    process_field_comment
+  fi
+}
+
+main "$@"
+#fin
