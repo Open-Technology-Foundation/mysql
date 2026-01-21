@@ -14,7 +14,7 @@ declare -ir ENUM_WRAP_THRESHOLD=${ENUM_WRAP_THRESHOLD:-40}
 # Configuration (modifiable by arguments)
 declare -- DATABASE=${DATABASE:-} FORMAT=${FORMAT:-table} OUTPUT_FILE=${OUTPUT_FILE:-} PROFILE=${PROFILE:-}
 declare -a TABLES=() FILTER_COLUMNS=()
-declare -i SHOW_STATS=0 NO_COLOR=0
+declare -i SHOW_STATS=0 NO_COLOR=0 SHOW_COMMENTS=0
 
 # Data arrays (populated during execution)
 declare -a HEADERS=() DATA=() WIDTHS=() ENUM_LINES=()
@@ -69,6 +69,7 @@ OPTIONS:
   -c, --columns COLS   Comma-separated list of columns to display
   -f, --format FMT     Output format: table (default), json, csv
   -s, --stats          Show table statistics (row count, size, etc.)
+  -C, --comments       Include column comments in output
   -n, --no-color       Disable colorized output
   -o, --output FILE    Write output to file (for json/csv formats)
   -h, --help           Display this help message
@@ -79,6 +80,7 @@ EXAMPLES:
   $SCRIPT_NAME mydb users orders -c Field,Type,Null
   $SCRIPT_NAME mydb users -f json -o structure.json
   $SCRIPT_NAME mydb users -s
+  $SCRIPT_NAME mydb users -C
   mysql mydb -e 'SHOW COLUMNS FROM users' | $SCRIPT_NAME
 HELP
 }
@@ -86,9 +88,15 @@ HELP
 # Run MySQL command and capture output
 run_mysql_command() {
   local -- database=$1 table=$2
-  local -- output
+  local -- output query
 
-  if ! output=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -e "SHOW COLUMNS FROM \`$table\`" 2>&1); then
+  if ((SHOW_COMMENTS)); then
+    query="SHOW FULL COLUMNS FROM \`$table\`"
+  else
+    query="SHOW COLUMNS FROM \`$table\`"
+  fi
+
+  if ! output=$(mysql ${PROFILE:+--defaults-file="$PROFILE"} "$database" -e "$query" 2>&1); then
     die 1 "MySQL error: $output"
   fi
   echo "$output"
@@ -145,6 +153,56 @@ parse_mysql_output() {
   done
 }
 
+# Split a tab-delimited row preserving empty fields
+# Usage: split_tsv_row "row" array_name
+split_tsv_row() {
+  local -- row=$1
+  local -n _fields=$2
+  _fields=()
+
+  # Handle empty row
+  [[ -n $row ]] || return 0
+
+  local -- field
+  # Append tab to ensure last field is captured
+  while IFS= read -r -d $'\t' field; do
+    _fields+=("$field")
+  done <<< "${row}"$'\t'
+}
+
+# Filter out Collation and Privileges columns from SHOW FULL COLUMNS output
+filter_unwanted_columns() {
+  ((SHOW_COMMENTS)) || return 0
+
+  local -a keep_indices=() new_headers=()
+  local -i i
+
+  for i in "${!HEADERS[@]}"; do
+    case "${HEADERS[i]}" in
+      Collation|Privileges) ;;  # Skip these
+      *) keep_indices+=("$i"); new_headers+=("${HEADERS[i]}") ;;
+    esac
+  done
+
+  # Filter data rows
+  local -a new_data=()
+  local -- row filtered_row
+  local -a fields
+
+  for row in "${DATA[@]}"; do
+    split_tsv_row "$row" fields
+    filtered_row=''
+    for i in "${keep_indices[@]}"; do
+      [[ -n $filtered_row ]] && filtered_row+=$'\t'
+      filtered_row+="${fields[i]:-}"
+    done
+    new_data+=("$filtered_row")
+  done
+
+  HEADERS=("${new_headers[@]}")
+  DATA=("${new_data[@]}")
+}
+
 # Apply column filter
 apply_column_filter() {
   ((${#FILTER_COLUMNS[@]})) || return 0
@@ -174,7 +232,7 @@ apply_column_filter() {
   local -a fields
 
   for row in "${DATA[@]}"; do
-    IFS=$'\t' read -ra fields <<< "$row"
+    split_tsv_row "$row" fields
     filtered_row=''
     for i in "${indices[@]}"; do
       [[ -n $filtered_row ]] && filtered_row+=$'\t'
@@ -202,7 +260,7 @@ calculate_column_widths() {
 
   # Check data widths
   for row in "${DATA[@]}"; do
-    IFS=$'\t' read -ra fields <<< "$row"
+    split_tsv_row "$row" fields
     for i in "${!fields[@]}"; do
       cell="${fields[i]}"
 
@@ -448,7 +506,7 @@ print_table() {
   # Print data rows
   local -a fields
   for row in "${DATA[@]}"; do
-    IFS=$'\t' read -ra fields <<< "$row"
+    split_tsv_row "$row" fields
 
     # Ensure we have enough fields
     while (( ${#fields[@]} < ${#HEADERS[@]} )); do
@@ -535,7 +593,7 @@ export_json() {
   local -a fields
 
   for row in "${DATA[@]}"; do
-    IFS=$'\t' read -ra fields <<< "$row"
+    split_tsv_row "$row" fields
 
     ((first_row)) || json_array+=','
     first_row=0
@@ -598,7 +656,7 @@ export_csv() {
   local -- row
   local -a fields
   for row in "${DATA[@]}"; do
-    IFS=$'\t' read -ra fields <<< "$row"
+    split_tsv_row "$row" fields
     local -- data_line=''
     for i in "${!HEADERS[@]}"; do
       ((i > 0)) && data_line+=","
@@ -627,6 +685,7 @@ process_table() {
   # Get table structure
   mysql_output=$(run_mysql_command "$database" "$table")
   parse_mysql_output <<< "$mysql_output"
+  filter_unwanted_columns
 
   ((${#HEADERS[@]})) || die 1 "Could not parse MySQL output"
 
@@ -655,11 +714,12 @@ main() {
       -c|--columns)  noarg "$@"; shift; IFS=',' read -ra FILTER_COLUMNS <<< "$1" ;;
       -f|--format)   noarg "$@"; shift; FORMAT=$1 ;;
       -s|--stats)    SHOW_STATS=1 ;;
+      -C|--comments) SHOW_COMMENTS=1 ;;
       -n|--no-color) NO_COLOR=1 ;;
       -o|--output)   noarg "$@"; shift; OUTPUT_FILE=$1 ;;
       -V|--version)  echo "$SCRIPT_NAME $VERSION"; return 0 ;;
       -h|--help)     usage; return 0 ;;
-      -[pcfsnoVh]?*) set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
+      -[pcfsCnoVh]?*) set -- "${1:0:2}" "-${1:2}" "${@:2}"; continue ;;
       -*)            die 22 "Invalid option ${1@Q}" ;;
       *)             [[ -z $DATABASE ]] && DATABASE="$1" || TABLES+=("$1") ;;
     esac
@@ -683,6 +743,7 @@ main() {
   # Handle stdin mode
   if [[ -z $DATABASE ]] && [[ ! -t 0 ]]; then
     parse_mysql_output
+    filter_unwanted_columns
     ((${#HEADERS[@]})) || die 1 'Could not parse MySQL output from stdin'
     apply_column_filter
     calculate_column_widths
