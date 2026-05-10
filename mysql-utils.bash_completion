@@ -1,0 +1,184 @@
+#!/bin/bash
+# Bash completion for MySQL utilities (data-driven dispatcher)
+#
+# Replaces mysql.bash_completion with a single-function architecture.
+# Source this file to enable tab-completion for all mysql.* utilities.
+#
+# Usage: source mysql-utils.bash_completion
+
+# --- Query helpers (profile-aware) ---
+
+__mu_databases() {
+  mysql ${1:+--defaults-file="$1"} -N -e "SHOW DATABASES" 2>/dev/null \
+    | grep -Ev '^(information_schema|performance_schema|mysql|sys)$'
+}
+
+__mu_tables() {
+  mysql ${2:+--defaults-file="$2"} -N "$1" -e "SHOW TABLES" 2>/dev/null
+}
+
+__mu_fields() {
+  mysql ${3:+--defaults-file="$3"} -N -e \
+    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$1' AND TABLE_NAME='$2'" 2>/dev/null
+}
+
+__mu_users() {
+  mysql ${1:+--defaults-file="$1"} -N -e "SELECT DISTINCT user FROM mysql.user ORDER BY user" 2>/dev/null
+}
+
+__mu_user_hosts() {
+  mysql ${1:+--defaults-file="$1"} -N -e "SELECT CONCAT(user,'@',host) FROM mysql.user ORDER BY user,host" 2>/dev/null
+}
+
+# --- Argument parser ---
+# Walks COMP_WORDS to extract positional args and profile.
+# Populates: _MU_POS[] (positional args), _MU_PROFILE (profile path)
+
+__mu_parse_line() {
+  _MU_POS=()
+  _MU_PROFILE=""
+  local -i i
+  for ((i = 1; i < COMP_CWORD; i++)); do
+    case "${COMP_WORDS[i]}" in
+      -p|--profile)                          ((i++)); _MU_PROFILE=${COMP_WORDS[i]-} ;;
+      -c|--columns|-f|--format|-o|--output)  ((i++)) ;;
+      -*)                                    ;;
+      *)                                     _MU_POS+=("${COMP_WORDS[i]}") ;;
+    esac
+  done
+}
+
+# --- Dispatcher ---
+
+_mysql_utils() {
+  local cur prev cmd key
+  COMPREPLY=()
+  cur=${COMP_WORDS[COMP_CWORD]}
+  prev=${COMP_WORDS[COMP_CWORD-1]}
+  cmd=${COMP_WORDS[0]##*/}
+  key=${cmd//[-.]/_}
+
+  # Resolve per-command config via namerefs
+  local -n opts=_MU_OPTS_${key}
+  local -n short=_MU_SHORT_${key}
+  local -n arg_opts=_MU_ARG_OPTS_${key}
+  local -n pos_type=_MU_POS_TYPE_${key}
+
+  # Option-argument completion (only for valid arg-opts of this command)
+  if [[ " $arg_opts " == *" $prev "* ]]; then
+    case "$prev" in
+      -p|--profile|-o|--output) mapfile -t COMPREPLY < <(compgen -f -- "$cur") ;;
+      -f|--format)              mapfile -t COMPREPLY < <(compgen -W "table json csv" -- "$cur") ;;
+      -c|--columns)             mapfile -t COMPREPLY < <(compgen -W "Field Type Null Key Default Extra Comment" -- "$cur") ;;
+    esac
+    return
+  fi
+
+  # Option name completion
+  if [[ $cur == -* ]]; then
+    mapfile -t COMPREPLY < <(compgen -W "$opts $short" -- "$cur")
+    return
+  fi
+
+  # Positional completion
+  command -v mysql >/dev/null 2>&1 || return
+  __mu_parse_line
+  local -i n=${#_MU_POS[@]}
+
+  case "$pos_type" in
+    db_tables)
+      if ((n == 0)); then
+        mapfile -t COMPREPLY < <(compgen -W "$(__mu_databases "$_MU_PROFILE")" -- "$cur")
+      else
+        mapfile -t COMPREPLY < <(compgen -W "$(__mu_tables "${_MU_POS[0]}" "$_MU_PROFILE")" -- "$cur")
+      fi
+      ;;
+    db_table_field)
+      if ((n == 0)); then
+        mapfile -t COMPREPLY < <(compgen -W "$(__mu_databases "$_MU_PROFILE")" -- "$cur")
+      elif ((n == 1)); then
+        mapfile -t COMPREPLY < <(compgen -W "$(__mu_tables "${_MU_POS[0]}" "$_MU_PROFILE")" -- "$cur")
+      elif ((n == 2)); then
+        mapfile -t COMPREPLY < <(compgen -W "$(__mu_fields "${_MU_POS[0]}" "${_MU_POS[1]}" "$_MU_PROFILE")" -- "$cur")
+      fi
+      ;;
+    user)
+      ((n == 0)) && mapfile -t COMPREPLY < <(compgen -W "$(__mu_users "$_MU_PROFILE")" -- "$cur")
+      ;;
+    user_host)
+      ((n == 0)) && mapfile -t COMPREPLY < <(compgen -W "$(__mu_user_hosts "$_MU_PROFILE")" -- "$cur")
+      ;;
+  esac
+}
+
+# --- Per-script configuration ---
+# Key: command name with [-.]  replaced by _
+
+# mysql.databases
+_MU_OPTS_mysql_databases="--profile --columns --format --stats --no-color --output --version --help"
+_MU_SHORT_mysql_databases="-p -c -f -s -n -o -V -h"
+_MU_ARG_OPTS_mysql_databases="-p --profile -c --columns -f --format -o --output"
+_MU_POS_TYPE_mysql_databases=db_tables
+
+# mysql.tables
+_MU_OPTS_mysql_tables="--profile --columns --format --stats --no-color --output --version --help"
+_MU_SHORT_mysql_tables="-p -c -f -s -n -o -V -h"
+_MU_ARG_OPTS_mysql_tables="-p --profile -c --columns -f --format -o --output"
+_MU_POS_TYPE_mysql_tables=db_tables
+
+# mysql.display-structure
+_MU_OPTS_mysql_display_structure="--profile --columns --format --stats --comments --no-color --output --version --help"
+_MU_SHORT_mysql_display_structure="-p -c -f -s -C -n -o -V -h"
+_MU_ARG_OPTS_mysql_display_structure="-p --profile -c --columns -f --format -o --output"
+_MU_POS_TYPE_mysql_display_structure=db_tables
+
+# mysql.field-comment
+_MU_OPTS_mysql_field_comment="--profile --dry-run --version --help"
+_MU_SHORT_mysql_field_comment="-p -n -V -h"
+_MU_ARG_OPTS_mysql_field_comment="-p --profile"
+_MU_POS_TYPE_mysql_field_comment=db_table_field
+
+# mysql.indexes
+_MU_OPTS_mysql_indexes="--profile --version --help"
+_MU_SHORT_mysql_indexes="-p -V -h"
+_MU_ARG_OPTS_mysql_indexes="-p --profile"
+_MU_POS_TYPE_mysql_indexes=db_tables
+
+# mysql.size
+_MU_OPTS_mysql_size="--profile --version --help"
+_MU_SHORT_mysql_size="-p -V -h"
+_MU_ARG_OPTS_mysql_size="-p --profile"
+_MU_POS_TYPE_mysql_size=db_tables
+
+# mysql.updates
+_MU_OPTS_mysql_updates="--profile --format --no-color --absolute --output --version --help"
+_MU_SHORT_mysql_updates="-p -f -n -a -o -V -h"
+_MU_ARG_OPTS_mysql_updates="-p --profile -f --format -o --output"
+_MU_POS_TYPE_mysql_updates=db_tables
+
+# mysql.status
+_MU_OPTS_mysql_status="--profile --verbose --version --help"
+_MU_SHORT_mysql_status="-p -v -V -h"
+_MU_ARG_OPTS_mysql_status="-p --profile"
+_MU_POS_TYPE_mysql_status=none
+
+# mysql.users
+_MU_OPTS_mysql_users="--profile --all --version --help"
+_MU_SHORT_mysql_users="-p -a -V -h"
+_MU_ARG_OPTS_mysql_users="-p --profile"
+_MU_POS_TYPE_mysql_users=user
+
+# mysql.grants
+_MU_OPTS_mysql_grants="--profile --all --version --help"
+_MU_SHORT_mysql_grants="-p -a -V -h"
+_MU_ARG_OPTS_mysql_grants="-p --profile"
+_MU_POS_TYPE_mysql_grants=user_host
+
+# --- Register completions ---
+
+complete -F _mysql_utils \
+  mysql.databases mysql.tables mysql.display-structure \
+  mysql.field-comment mysql.indexes mysql.size mysql.updates \
+  mysql.status mysql.users mysql.grants
+
+#fin

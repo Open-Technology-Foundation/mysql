@@ -427,10 +427,10 @@ chmod +x mysql.*
 ln -s "$(pwd)"/mysql.* ~/.local/bin/
 
 # Enable bash completion
-source mysql.bash_completion
+source mysql-utils.bash_completion
 
 # For persistent completion, add to ~/.bashrc:
-# source /path/to/mysql.bash_completion
+# source /path/to/mysql-utils.bash_completion
 ```
 
 ## Dependencies
